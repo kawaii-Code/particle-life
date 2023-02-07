@@ -1,0 +1,6 @@
+# Clangd config
+compile_flags.txt
+
+# Binary files
+*.exe
+*.dll
