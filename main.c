@@ -13,6 +13,33 @@ void pixels_fill(int color) {
     }
 }
 
+void pixels_display_particle_at(int x, int y, Color particle_color) {
+    for (int dy = y - 2; dy < y + 2; dy++) {
+        if (dy < 0 || dy >= HEIGHT)
+            continue;
+
+        for (int dx = x - 2; dx < x + 2; dx++) {
+            if (dx < 0 || dx >= WIDTH)
+                continue;
+
+            pixels[dy*WIDTH + dx] = 0xFF2222FF;
+        }
+    }
+}
+
+void pixels_display_particles() {
+    const Particle *const particles = particles_get_all();
+    
+    for (int i = 0; i < COUNT; i++) {
+        Particle p = particles[i];
+        
+        int x = p.x;
+        int y = p.y;
+
+        pixels_display_particle_at(x, y, p.color);
+    }
+}
+
 int main() {
     render_init("Particle life", WIDTH, HEIGHT);
     particles_init(WIDTH, HEIGHT);
@@ -31,7 +58,7 @@ int main() {
         particles_update();
 
         pixels_fill(BACKGROUND_COLOR);
-        particles_draw_all(pixels, WIDTH, HEIGHT);
+        pixels_display_particles();
 
         render_draw(pixels, WIDTH*4);
     }

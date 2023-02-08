@@ -61,27 +61,8 @@ void particles_init(size_t pixels_width, size_t pixels_height) {
     }
 }
 
-void particle_draw(int *pixels, size_t pixels_width, size_t pixels_height, Particle *particle) {
-    int x = particle->x;
-    int y = particle->y;
-
-    for (int dx = x - 5; dx < x + 5; dx++) {
-        if (dx < 0 || dx >= pixels_width) 
-            continue;
-        for (int dy = y - 5; dy < y + 5; dy++) {
-            if (dy < 0 || dy >= pixels_height)
-                continue;
-
-            pixels[dy*pixels_width + dx] = particle->color;
-        }
-    }
-}
-
-void particles_draw_all(int *pixels, size_t pixels_width, size_t pixels_height) {
-    for (size_t i = 0; i < COUNT; i++) {
-        Particle particle = particles[i];
-        particle_draw(pixels, pixels_width, pixels_height, &particle);
-    }
+const Particle *const particles_get_all() {
+    return particles;
 }
 
 void particles_update() {
