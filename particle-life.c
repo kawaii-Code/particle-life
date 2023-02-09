@@ -1,5 +1,8 @@
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <float.h>
+#include <math.h>
 
 typedef enum {
     RED    = 0xFF2222EE,
@@ -56,7 +59,7 @@ void particles_setup(size_t pixels_width, size_t pixels_height) {
             particle.dy = -1;
         }
 
-        particle.color = RED;
+        particle.color = 4 * rand() / RAND_MAX == 1 ? GREEN : RED;
         particles[i] = particle;
     }
 }
@@ -65,22 +68,89 @@ const Particle *particles_get_all() {
     return particles;
 }
 
+#define RMIN 10.0
+#define RMAX 300.0
+
+#define RED_TO_RED_FORCE        2.0
+#define RED_TO_GREEN_FORCE     -7.0
+#define GREEN_TO_RED_FORCE      2.0
+#define GREEN_TO_GREEN_FORCE   -2.0
+
+#define UNIVERSAL_REPEL_FORCE  -10.0
+
+float particles_get_force(Particle *from, Particle *to) {
+    if (from->color == RED && to->color == RED)
+        return RED_TO_RED_FORCE;
+    if (from->color == RED && to->color == GREEN)
+        return RED_TO_GREEN_FORCE;
+    if (from->color == GREEN && to->color == RED)
+        return GREEN_TO_RED_FORCE;
+    if (from->color == GREEN && to->color == GREEN)
+        return GREEN_TO_GREEN_FORCE;
+    return 0.0;
+}
+
 void particles_update() {
     for (int i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle = particles[i];
 
         particle.x += particle.dx;
         particle.y += particle.dy;
+        if (particle.x < 0)
+            particle.x = width + particle.x;
+        if (particle.y < 0)
+            particle.y = height + particle.y;
+        particle.x = particle.x % width;
+        particle.y = particle.y % height;
 
-        if (particle.x >= width - 1 || particle.x <= 0) {
-            particle.dx *= -1;
+        float ndx = 0;
+        float ndy = 0;
+        for (int j = 0; j < PARTICLE_COUNT; j++) {
+            if (i == j)
+                continue;
+
+            Particle other = particles[j];
+            int x1 = particle.x, x2 = other.x;
+            int y1 = particle.y, y2 = other.y;
+            int dx = x2 - x1;
+            int dy = y2 - y1;
+
+            float dist = sqrt(dx*dx + dy*dy);
+
+            if (dist > RMAX)
+                continue;
+
+            float angle = atan2f(dy, dx);
+            float bestDist = (RMAX + RMIN) / 2;
+            float force;
+            
+            if (dist < RMIN) {
+                force = UNIVERSAL_REPEL_FORCE * (1 + (dist*dist) / (RMIN*RMIN));
+            }
+            else if (dist <= bestDist) {
+                float distInMin = dist - RMIN;
+                float distInBest = bestDist - RMIN;
+
+                float color_force = particles_get_force(&particle, &other);
+
+                force = color_force * distInMin / distInBest;
+
+            } else {
+                float distInMin = RMAX - dist;
+                float distInBest = RMAX - bestDist;
+
+                float color_force = particles_get_force(&particle, &other);
+
+                force = color_force * (1 - distInMin / distInBest);
+            }
+
+            ndx += force * cosf(angle);
+            ndy += force * sinf(angle);
         }
 
-        if (particle.y >= height - 1 || particle.y <= 0) {
-            particle.dy *= -1;
-        }
+        particle.dx = (int) ndx;
+        particle.dy = (int) ndy;
 
         particles[i] = particle;
-
     }
 }
