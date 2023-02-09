@@ -42,7 +42,7 @@ void pixels_display_particles() {
 
 int main() {
     render_init("Particle life", WIDTH, HEIGHT);
-    particles_init(WIDTH, HEIGHT);
+    particles_setup(WIDTH, HEIGHT);
 
     int run = 1;
     SDL_Event e;
