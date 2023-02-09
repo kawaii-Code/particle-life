@@ -16,9 +16,9 @@ typedef struct {
     Color color;
 } Particle;
 
-#define COUNT 100
+#define PARTICLE_COUNT 100
 
-static Particle particles[COUNT];
+static Particle particles[PARTICLE_COUNT];
 static int width;
 static int height;
 
@@ -26,7 +26,7 @@ void particles_setup(size_t pixels_width, size_t pixels_height) {
     width = pixels_width;
     height = pixels_height;
 
-    for (size_t i = 0; i < COUNT; i++) {
+    for (size_t i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle;
         particle.x = rand() * width / RAND_MAX;
         particle.y = rand() * height / RAND_MAX;
@@ -61,12 +61,12 @@ void particles_setup(size_t pixels_width, size_t pixels_height) {
     }
 }
 
-const Particle *const particles_get_all() {
+const Particle *particles_get_all() {
     return particles;
 }
 
 void particles_update() {
-    for (int i = 0; i < COUNT; i++) {
+    for (int i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle = particles[i];
 
         particle.x += particle.dx;
