@@ -22,15 +22,15 @@ void pixels_display_particle_at(int x, int y, Color particle_color) {
             if (dx < 0 || dx >= WIDTH)
                 continue;
 
-            pixels[dy*WIDTH + dx] = 0xFF2222FF;
+            pixels[dy*WIDTH + dx] = particle_color;
         }
     }
 }
 
 void pixels_display_particles() {
-    const Particle *const particles = particles_get_all();
+    const Particle *particles = particles_get_all();
     
-    for (int i = 0; i < COUNT; i++) {
+    for (int i = 0; i < PARTICLE_COUNT; i++) {
         Particle p = particles[i];
         
         int x = p.x;
