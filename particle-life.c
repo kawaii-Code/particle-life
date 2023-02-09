@@ -22,7 +22,7 @@ static Particle particles[COUNT];
 static int width;
 static int height;
 
-void particles_init(size_t pixels_width, size_t pixels_height) {
+void particles_setup(size_t pixels_width, size_t pixels_height) {
     width = pixels_width;
     height = pixels_height;
 
