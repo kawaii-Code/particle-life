@@ -76,7 +76,8 @@ const Particle *particles_get_all() {
 #define GREEN_TO_RED_FORCE      2.0
 #define GREEN_TO_GREEN_FORCE   -2.0
 
-#define UNIVERSAL_REPEL_FORCE  -10.0
+#define UNIVERSAL_REPEL_FORCE  -8.0
+#define UNIVERSAL_FRICTION      0.5
 
 float particles_get_force(Particle *from, Particle *to) {
     if (from->color == RED && to->color == RED)
@@ -102,6 +103,9 @@ void particles_update() {
             particle.y = height + particle.y;
         particle.x = particle.x % width;
         particle.y = particle.y % height;
+
+        particle.dx *= UNIVERSAL_FRICTION;
+        particle.dy *= UNIVERSAL_FRICTION;
 
         float ndx = 0;
         float ndy = 0;
