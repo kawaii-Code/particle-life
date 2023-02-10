@@ -20,14 +20,15 @@ typedef struct {
 } Particle;
 
 #define PARTICLE_COUNT 100
+#define PARTICLE_VIRTUAL_SCALE 15
 
 static Particle particles[PARTICLE_COUNT];
 static int width;
 static int height;
 
 void particles_setup(size_t pixels_width, size_t pixels_height) {
-    width = pixels_width;
-    height = pixels_height;
+    width = pixels_width * PARTICLE_VIRTUAL_SCALE;
+    height = pixels_height * PARTICLE_VIRTUAL_SCALE;
 
     for (size_t i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle;
@@ -68,16 +69,16 @@ const Particle *particles_get_all() {
     return particles;
 }
 
-#define RMIN 10.0
-#define RMAX 300.0
+#define RMIN PARTICLE_VIRTUAL_SCALE * 5.0
+#define RMAX PARTICLE_VIRTUAL_SCALE * 300.0
 
-#define RED_TO_RED_FORCE        2.0
-#define RED_TO_GREEN_FORCE     -7.0
-#define GREEN_TO_RED_FORCE      2.0
-#define GREEN_TO_GREEN_FORCE   -2.0
+#define RED_TO_RED_FORCE       8.0
+#define RED_TO_GREEN_FORCE     -4.0
+#define GREEN_TO_RED_FORCE     4.0
+#define GREEN_TO_GREEN_FORCE   8.0
 
 #define UNIVERSAL_REPEL_FORCE  -8.0
-#define UNIVERSAL_FRICTION      0.5
+#define UNIVERSAL_FRICTION     0.5
 
 float particles_get_force(Particle *from, Particle *to) {
     if (from->color == RED && to->color == RED)
