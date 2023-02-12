@@ -19,7 +19,7 @@ typedef struct {
     Color color;
 } Particle;
 
-#define PARTICLE_COUNT 200
+#define PARTICLE_COUNT 500
 #define PARTICLE_VIRTUAL_SCALE 30
 
 static Particle particles[PARTICLE_COUNT];

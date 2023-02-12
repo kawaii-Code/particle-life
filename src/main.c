@@ -1,8 +1,9 @@
+#include <stdio.h>
 #include "render.c"
 #include "particle-life.c"
 
-#define WIDTH  800
-#define HEIGHT 600
+#define WIDTH  1080
+#define HEIGHT 1080
 #define BACKGROUND_COLOR 0xFF222222
 
 int pixels[WIDTH*HEIGHT];
@@ -13,16 +14,36 @@ void pixels_fill(int color) {
     }
 }
 
+int particle_brightness[5][5] =
+{
+    { 5, 3, 2, 3, 5 },
+    { 3, 2, 1, 2, 3 },
+    { 3, 1, 1, 1, 3 },
+    { 3, 2, 1, 2, 3 },
+    { 5, 3, 2, 3, 5 },
+};
+
 void pixels_display_particle_at(int x, int y, Color particle_color) {
-    for (int dy = y - 2; dy < y + 2; dy++) {
+    int countY = 0;
+    int countX = 0;
+    for (int dy = y - 2; dy <= y + 2; dy++, countY++) {
         if (dy < 0 || dy >= HEIGHT)
             continue;
 
-        for (int dx = x - 2; dx < x + 2; dx++) {
+        countX = 0;
+        for (int dx = x - 2; dx <= x + 2; dx++, countX++) {
             if (dx < 0 || dx >= WIDTH)
                 continue;
 
-            pixels[dy*WIDTH + dx] = particle_color;
+            int brightness = particle_brightness[countY][countX];
+            Color color = particle_color;
+
+            int r = (color >> 0*8) & 0xFF / brightness;
+            int g = (color >> 1*8) & 0xFF / brightness;
+            int b = (color >> 2*8) & 0xFF / brightness;
+            int res = r | g << 8 | b << 16 | 255 << 24;
+
+            pixels[dy*WIDTH + dx] = res;
         }
     }
 }
