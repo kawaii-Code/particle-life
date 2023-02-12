@@ -19,8 +19,8 @@ typedef struct {
     Color color;
 } Particle;
 
-#define PARTICLE_COUNT 100
-#define PARTICLE_VIRTUAL_SCALE 15
+#define PARTICLE_COUNT 200
+#define PARTICLE_VIRTUAL_SCALE 30
 
 static Particle particles[PARTICLE_COUNT];
 static int width;
@@ -32,33 +32,8 @@ void particles_setup(size_t pixels_width, size_t pixels_height) {
 
     for (size_t i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle;
-        particle.x = rand() * width / RAND_MAX;
-        particle.y = rand() * height / RAND_MAX;
-    
-        int randMaxD3 = RAND_MAX / 3;
-        int randMax2D3 = 2 * randMaxD3;
-    
-        int randDx = rand();
-        if (randDx > randMaxD3) {
-            if (randDx > randMax2D3) {
-                particle.dx = 1;
-            } else {
-                particle.dx = 0;
-            }
-        } else {
-            particle.dx = -1;
-        }
-
-        int randDy = rand();
-        if (randDy > randMaxD3) {
-            if (randDy > randMax2D3) {
-                particle.dy = 1;
-            } else {
-                particle.dy = 0;
-            }
-        } else {
-            particle.dy = -1;
-        }
+        particle.x = rand() * width / RAND_MAX - width/2;
+        particle.y = rand() * height / RAND_MAX - height/2;
 
         particle.color = 4 * rand() / RAND_MAX == 1 ? GREEN : RED;
         particles[i] = particle;
@@ -70,14 +45,14 @@ const Particle *particles_get_all() {
 }
 
 #define RMIN PARTICLE_VIRTUAL_SCALE * 5.0
-#define RMAX PARTICLE_VIRTUAL_SCALE * 300.0
+#define RMAX PARTICLE_VIRTUAL_SCALE * 150.0
 
-#define RED_TO_RED_FORCE       8.0
-#define RED_TO_GREEN_FORCE     -4.0
-#define GREEN_TO_RED_FORCE     4.0
-#define GREEN_TO_GREEN_FORCE   8.0
+#define RED_TO_RED_FORCE       9.0
+#define RED_TO_GREEN_FORCE     -7.0
+#define GREEN_TO_RED_FORCE     5.0
+#define GREEN_TO_GREEN_FORCE   9.0
 
-#define UNIVERSAL_REPEL_FORCE  -8.0
+#define UNIVERSAL_REPEL_FORCE  15.0
 #define UNIVERSAL_FRICTION     0.5
 
 float particles_get_force(Particle *from, Particle *to) {
@@ -92,19 +67,25 @@ float particles_get_force(Particle *from, Particle *to) {
     return 0.0;
 }
 
+void particles_wrap(Particle *particle) {
+    if (particle->x <= -width/2)
+        particle->x = width/2;
+    else 
+        particle->x = (particle->x + width/2) % width - width/2;
+
+    if (particle->y <= -height/2)
+        particle->y = height/2;
+    else
+        particle->y = (particle->y + height/2) % height - height/2;
+}
+
 void particles_update() {
     for (int i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle = particles[i];
 
         particle.x += particle.dx;
         particle.y += particle.dy;
-        if (particle.x < 0)
-            particle.x = width + particle.x;
-        if (particle.y < 0)
-            particle.y = height + particle.y;
-        particle.x = particle.x % width;
-        particle.y = particle.y % height;
-
+        particles_wrap(&particle);
         particle.dx *= UNIVERSAL_FRICTION;
         particle.dy *= UNIVERSAL_FRICTION;
 
@@ -120,12 +101,14 @@ void particles_update() {
             int dx = x2 - x1;
             int dy = y2 - y1;
 
-            float dist = sqrt(dx*dx + dy*dy);
+            int wx = -1 * ((dx + width/2) % width - width/2);
+            int wy = -1 * ((dy + height/2) % height - height/2);
+            float dist = sqrt(wx*wx + wy*wy);
 
             if (dist > RMAX)
                 continue;
 
-            float angle = atan2f(dy, dx);
+            float angle = atan2f(wy, wx);
             float bestDist = (RMAX + RMIN) / 2;
             float force;
             
