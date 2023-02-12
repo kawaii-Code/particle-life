@@ -35,7 +35,7 @@ void pixels_display_particles() {
         
         int x = WIDTH/2  + p.x / PARTICLE_VIRTUAL_SCALE;
         int y = HEIGHT/2 + p.y / PARTICLE_VIRTUAL_SCALE;
-
+        
         pixels_display_particle_at(x, y, p.color);
     }
 }

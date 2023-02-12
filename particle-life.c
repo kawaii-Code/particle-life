@@ -29,7 +29,7 @@ static int height;
 void particles_setup(size_t pixels_width, size_t pixels_height) {
     width = pixels_width * PARTICLE_VIRTUAL_SCALE;
     height = pixels_height * PARTICLE_VIRTUAL_SCALE;
-
+    
     for (size_t i = 0; i < PARTICLE_COUNT; i++) {
         Particle particle;
         particle.x = rand() * width / RAND_MAX - width/2;
