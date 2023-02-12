@@ -1,6 +1,6 @@
 TARGET = particle-life
 
-SRC = main.c
+SRC = src/main.c
 
 CC = gcc
 CFLAGS  =  -Wall -Wextra
