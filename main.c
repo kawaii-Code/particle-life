@@ -33,9 +33,9 @@ void pixels_display_particles() {
     for (int i = 0; i < PARTICLE_COUNT; i++) {
         Particle p = particles[i];
         
-        int x = p.x;
-        int y = p.y;
-
+        int x = WIDTH/2  + p.x / PARTICLE_VIRTUAL_SCALE;
+        int y = HEIGHT/2 + p.y / PARTICLE_VIRTUAL_SCALE;
+        
         pixels_display_particle_at(x, y, p.color);
     }
 }
