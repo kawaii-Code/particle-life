@@ -5,13 +5,23 @@
 #include <math.h>
 
 typedef enum {
-    RED    = 0xFF2222EE,
-    ORANGE = 0xFF2288EE,
-    YELLOW = 0xFF22EEEE,
-    GREEN  = 0xFF22EE22,
-    BLUE   = 0xFFEE2222,
-    PURPLE = 0xFFEE2288,
-} Color;
+    RED    = 0xFF2222EE, // #EE2222
+    ORANGE = 0xFF2288EE, // #EE8822
+    YELLOW = 0xFF22EEEE, // #EEEE22
+    GREEN  = 0xFF22EE22, // #22EE22
+    BLUE   = 0xFFEE2222, // #2222EE
+    PURPLE = 0xFFEE2288, // #8822EE
+} Color; // A color in ABGR format
+
+typedef enum {
+    RED_INDEX    = 0,
+    ORANGE_INDEX = 1,
+    YELLOW_INDEX = 2,
+    GREEN_INDEX  = 3,
+    BLUE_INDEX   = 4,
+    PURPLE_INDEX = 5,
+    COLOR_COUNT  = 6
+} ColorIndex;
 
 typedef struct {
     int x, y;
@@ -44,27 +54,58 @@ const Particle *particles_get_all() {
     return particles;
 }
 
-#define RMIN PARTICLE_VIRTUAL_SCALE * 5.0
-#define RMAX PARTICLE_VIRTUAL_SCALE * 150.0
-
-#define RED_TO_RED_FORCE       9.0
-#define RED_TO_GREEN_FORCE     -7.0
-#define GREEN_TO_RED_FORCE     5.0
-#define GREEN_TO_GREEN_FORCE   9.0
-
-#define UNIVERSAL_REPEL_FORCE  15.0
+#define RMIN  (PARTICLE_VIRTUAL_SCALE * 5.0)
+#define RMAX  (PARTICLE_VIRTUAL_SCALE * 150.0)
+#define RBEST ((RMIN + RMAX) / 2)
+#define UNIVERSAL_REPEL_FORCE  20.0
 #define UNIVERSAL_FRICTION     0.5
 
+int particles_get_color_index(Particle *p) {
+    Color color = p->color;
+
+    if (color == RED)
+        return RED_INDEX;
+    if (color == ORANGE)
+        return ORANGE_INDEX;
+    if (color == YELLOW)
+        return YELLOW_INDEX;
+    if (color == GREEN)
+        return GREEN_INDEX;
+    if (color == BLUE)
+        return BLUE_INDEX;
+    if (color == PURPLE)
+        return PURPLE_INDEX;
+
+    return -1;
+}
+
+//    | R | O | Y | G | B | P |
+//  R |                       |
+//  O |                       |
+//  Y |                       |
+//  G |                       |
+//  B |                       |
+//  P |                       |
+float ParticlesAttractionMatrix[COLOR_COUNT][COLOR_COUNT] =
+{
+    {   9.0,   0.0,   0.0,   5.0,   0.0,   0.0 },
+
+    {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
+
+    {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
+
+    {  -7.0,   0.0,   0.0,   9.0,   0.0,   0.0 },
+
+    {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
+
+    {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
+};
+
 float particles_get_force(Particle *from, Particle *to) {
-    if (from->color == RED && to->color == RED)
-        return RED_TO_RED_FORCE;
-    if (from->color == RED && to->color == GREEN)
-        return RED_TO_GREEN_FORCE;
-    if (from->color == GREEN && to->color == RED)
-        return GREEN_TO_RED_FORCE;
-    if (from->color == GREEN && to->color == GREEN)
-        return GREEN_TO_GREEN_FORCE;
-    return 0.0;
+    int indexFrom = particles_get_color_index(from);
+    int indexTo = particles_get_color_index(to);
+
+    return ParticlesAttractionMatrix[indexFrom][indexTo];
 }
 
 void particles_wrap(Particle *particle) {
