@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 
+// #E39483
 typedef enum {
     RED    = 0xFF2222EE, // #EE2222
     ORANGE = 0xFF2288EE, // #EE8822
@@ -29,7 +30,7 @@ typedef struct {
     Color color;
 } Particle;
 
-#define PARTICLE_COUNT 500
+#define PARTICLE_COUNT 100
 #define PARTICLE_VIRTUAL_SCALE 30
 
 static Particle particles[PARTICLE_COUNT];
@@ -45,7 +46,12 @@ void particles_setup(size_t pixels_width, size_t pixels_height) {
         particle.x = rand() * width / RAND_MAX - width/2;
         particle.y = rand() * height / RAND_MAX - height/2;
 
-        particle.color = 4 * rand() / RAND_MAX == 1 ? GREEN : RED;
+        int r = 8 * rand() / RAND_MAX;
+        if (r < 3)
+            particle.color = GREEN;
+        else if (r < 8)
+            particle.color = RED;
+
         particles[i] = particle;
     }
 }
@@ -54,11 +60,11 @@ const Particle *particles_get_all() {
     return particles;
 }
 
-#define RMIN  (PARTICLE_VIRTUAL_SCALE * 5.0)
+#define RMIN  (PARTICLE_VIRTUAL_SCALE * 40.0)
 #define RMAX  (PARTICLE_VIRTUAL_SCALE * 150.0)
 #define RBEST ((RMIN + RMAX) / 2)
 #define UNIVERSAL_REPEL_FORCE  20.0
-#define UNIVERSAL_FRICTION     0.5
+#define UNIVERSAL_FRICTION     0.75
 
 int particles_get_color_index(Particle *p) {
     Color color = p->color;
@@ -88,24 +94,24 @@ int particles_get_color_index(Particle *p) {
 //  P |                       |
 float ParticlesAttractionMatrix[COLOR_COUNT][COLOR_COUNT] =
 {
-    {   9.0,   0.0,   0.0,   5.0,   0.0,   0.0 },
+    { 5*9.0,   0.0,   0.0, 9*5.0,   0.0,   0.0 },
 
     {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
 
     {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
 
-    {  -7.0,   0.0,   0.0,   9.0,   0.0,   0.0 },
+    {8*-9.0,   0.0,   0.0, 3*9.0,   0.0,   0.0 },
 
     {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
 
-    {   0.0,   0.0,   0.0,   0.0,   0.0,   0.0 },
+    {   0.0,   0.0,   0.0,   0.0,   0.0, 3*6.0 },
 };
 
 float particles_get_force(Particle *from, Particle *to) {
     int indexFrom = particles_get_color_index(from);
     int indexTo = particles_get_color_index(to);
 
-    return ParticlesAttractionMatrix[indexFrom][indexTo];
+    return ParticlesAttractionMatrix[indexTo][indexFrom];
 }
 
 void particles_wrap(Particle *particle) {
@@ -142,43 +148,43 @@ void particles_update() {
             int dx = x2 - x1;
             int dy = y2 - y1;
 
-            int wx = -1 * ((dx + width/2) % width - width/2);
-            int wy = -1 * ((dy + height/2) % height - height/2);
+            int signX = dx < 0 ? -1 : 1;
+            int signY = dy < 0 ? -1 : 1;
+            int wx = ((dx + signX * width/2) % width - signX * width/2);
+            int wy = ((dy + signY * height/2) % height - signY * height/2);
             float dist = sqrt(wx*wx + wy*wy);
 
             if (dist > RMAX)
                 continue;
 
             float angle = atan2f(wy, wx);
-            float bestDist = (RMAX + RMIN) / 2;
             float force;
             
             if (dist < RMIN) {
-                force = UNIVERSAL_REPEL_FORCE * (1 + (dist*dist) / (RMIN*RMIN));
+                force = UNIVERSAL_REPEL_FORCE * (-(RMIN / dist));
             }
-            else if (dist <= bestDist) {
+            else if (dist <= RBEST) {
                 float distInMin = dist - RMIN;
-                float distInBest = bestDist - RMIN;
+                float distInBest = RBEST - RMIN;
 
                 float color_force = particles_get_force(&particle, &other);
 
-                force = color_force * distInMin / distInBest;
-
+                force = color_force * (1 + distInMin / distInBest);
             } else {
                 float distInMin = RMAX - dist;
-                float distInBest = RMAX - bestDist;
+                float distInBest = RMAX - RBEST;
 
                 float color_force = particles_get_force(&particle, &other);
 
                 force = color_force * (1 - distInMin / distInBest);
             }
 
-            ndx += force * cosf(angle);
-            ndy += force * sinf(angle);
+            ndx = force * cosf(angle);
+            ndy = force * sinf(angle);
         }
 
-        particle.dx = (int) ndx;
-        particle.dy = (int) ndy;
+        particle.dx += (int) ndx;
+        particle.dy += (int) ndy;
 
         particles[i] = particle;
     }
