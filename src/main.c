@@ -8,7 +8,7 @@
 
 int pixels[WIDTH*HEIGHT];
 
-void pixels_fill(int color) {
+void fill_backround(int color) {
     for (size_t i = 0; i < WIDTH*HEIGHT; i++) {
         pixels[i] = color;
     }
@@ -23,7 +23,7 @@ int particle_brightness[5][5] =
     { 5, 3, 2, 3, 5 },
 };
 
-void pixels_display_particle_at(int x, int y, Color particle_color) {
+void draw_particle(int x, int y, Color particle_color) {
     int countY = 0;
     int countX = 0;
     for (int dy = y - 2; dy <= y + 2; dy++, countY++) {
@@ -48,7 +48,7 @@ void pixels_display_particle_at(int x, int y, Color particle_color) {
     }
 }
 
-void pixels_display_particles() {
+void draw_particles() {
     const Particle *particles = particles_get_all();
     
     for (int i = 0; i < PARTICLE_COUNT; i++) {
@@ -57,8 +57,15 @@ void pixels_display_particles() {
         float x = (float)WIDTH/2  + (float)p.x / (float)PARTICLE_VIRTUAL_SCALE;
         float y = (float)HEIGHT/2 + (float)p.y / (float)PARTICLE_VIRTUAL_SCALE;
         
-        pixels_display_particle_at(round(x), round(y), p.color);
+        draw_particle(round(x), round(y), p.color);
     }
+}
+
+void spawn_particle(int x, int y, int button) {
+    if (button == SDL_BUTTON_LEFT)
+        particles_spawn(x, y, RED);
+    else if (button == SDL_BUTTON_RIGHT)
+        particles_spawn(x, y, GREEN);
 }
 
 int main() {
@@ -73,13 +80,19 @@ int main() {
                 case SDL_KEYDOWN:
                     if (e.key.keysym.sym == SDLK_q)
                         run = 0;
+                    if (e.key.keysym.sym == SDLK_r)
+                        particles_randomize_matrix();
+                    break;
+                case SDL_MOUSEBUTTONDOWN:
+                    spawn_particle(e.button.x, e.button.y, e.button.button);
+                    break;
             }
         }
 
         particles_update();
 
-        pixels_fill(BACKGROUND_COLOR);
-        pixels_display_particles();
+        fill_backround(BACKGROUND_COLOR);
+        draw_particles();
 
         render_draw(pixels, WIDTH*4);
     }
