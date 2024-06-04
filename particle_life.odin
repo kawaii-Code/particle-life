@@ -101,23 +101,21 @@ direction_and_distance_between :: proc(p1: [2]f32, p2: [2]f32) -> (direction: [2
     return linalg.normalize0(direction), math.sqrt(distance)
 }
 
-update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
+update_particles :: proc(particles: #soa[dynamic]Particle, dt: f32) {
     using linalg
 
-    for i := 0; i < len(particles); i += 1 {
-        p1 := &particles[i]
+    for &p1, i in particles {
         p1.pos += p1.v * dt
-        wrap_particle_position(p1)
+        wrap_particle_position(&p1)
         
         f : [2]f32
-        for j := 0; j < len(particles); j += 1 {
+        for &p2, j in particles {
             if i == j {
                 continue
             }
-            p2 := &particles[j]
             attraction_color_coef := get_attraction_for(p1.c, p2.c)
             
-            direction, distance := direction_and_distance_between(p1^, p2^)
+            direction, distance := direction_and_distance_between(p1, p2)
             if distance > particle_max_distance {
                 continue
             }

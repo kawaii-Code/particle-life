@@ -103,7 +103,7 @@ main :: proc() {
     player : PlayerState
     player.click_spawn_count = 1
 
-    particles : [dynamic]Particle
+    particles : #soa[dynamic]Particle
     defer delete(particles)
 
     fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
@@ -165,7 +165,7 @@ main :: proc() {
                         particle_spawn_spread * rand.float32() - particle_spawn_spread / 2.0,
                         particle_spawn_spread * rand.float32() - particle_spawn_spread / 2.0
                     }
-                    append(&particles, Particle{pos, {0, 0}, color})
+                    append_soa(&particles, Particle{pos, {0, 0}, color})
                 }
             }
         }
@@ -176,7 +176,7 @@ main :: proc() {
                 fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
             }
             if (IsKeyPressed(KeyboardKey.C)) {
-                clear(&particles)
+                clear_soa(&particles)
             }
             if (IsKeyPressed(KeyboardKey.T)) {
                 if _, ok := player.tracked_particle_index.?; ok {
