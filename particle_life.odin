@@ -14,12 +14,13 @@ particle_air_resistance      : f32 = 20
 particle_repel_distance      : f32 = 0.05
 particle_max_distance        : f32 = 0.2
 particle_color_count         :     : int(ParticleColor.Count)
+particle_half_life           :     : 0.1
 
 particle_max_velocity        :: 10.0
 
 epsilon :: 0.0001
 
-particle_attraction_table : [particle_color_count][particle_color_count]f32
+particle_attraction_table : [particle_color_count * particle_color_count]f32
 
 
 
@@ -31,6 +32,12 @@ Particle :: struct {
     using pos: [2]f32,
     v: [2]f32,
     c: ParticleColor,
+}
+
+
+
+get_attraction_for :: proc(c1, c2: ParticleColor) -> f32 {
+    return particle_attraction_table[int(c1) * particle_color_count + int(c2)]
 }
 
 wrap_particle_position :: proc(p: ^Particle) {
@@ -45,8 +52,6 @@ wrap_particle_position :: proc(p: ^Particle) {
         p.y = 0
     }
 }
-
-particle_half_life :: 0.1
 
 direction_and_distance_between :: proc(p1: [2]f32, p2: [2]f32) -> (direction: [2]f32, distance: f32) {
     direction = p2 - p1
@@ -110,13 +115,14 @@ update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
                 continue
             }
             p2 := &particles[j]
-            attraction_color_coef := particle_attraction_table[int(p1.c)][int(p2.c)]
+            attraction_color_coef := get_attraction_for(p1.c, p2.c)
             
             direction, distance := direction_and_distance_between(p1^, p2^)
-            
             if distance > particle_max_distance {
                 continue
-            } else if distance < particle_repel_distance {
+            }
+            
+            if distance < particle_repel_distance {
                 repel_direction := length2(direction) < epsilon ? rand_direction() : normalize(-1 * direction)
                 f += particle_repel_strength * repel_direction * (1.0 - distance / particle_repel_distance)
             } else {
@@ -129,13 +135,6 @@ update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
                 attraction_force = attract_direction * t
                 f += particle_attraction_strength * attraction_color_coef * attraction_force
             }
-            // if distance < particle_repel_distance {
-            //     attraction_force = direction * distance / particle_repel_distance - 1
-            // } else {
-            //     attraction_force = direction * (1 - math.abs(1 + particle_repel_distance - 2 * distance) / (1 - particle_repel_distance));
-            //     // attraction_force = direction / particle_repel_distance - 1
-            // }
-            
            
             when ODIN_DEBUG {
                 if math.is_nan(f.x) || math.is_nan(f.y) {
@@ -144,18 +143,7 @@ update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
                 }
             }
         }
-        
-        // f /= f32(len(particles))
-        // f += -1 * normalize0(p1.v) * particle_air_resistance * length2(p1.v)
-        // when ODIN_DEBUG {
-        //     if math.is_nan(f.x) || math.is_nan(f.y) {
-        //         fmt.println("nan. on air_resistance. v = ", p1.v, " length = ", length(p1.v), "epsilon = ", epsilon, "normalized = ", normalize(p1.v))
-        //         os.exit(1)
-        //     }
-        // }
+
         p1.v = math.pow(0.5, dt / particle_half_life) * p1.v + f * dt
-        // if length2(p1.v) >= particle_max_velocity {
-        //     p1.v = rand_direction() * particle_max_velocity
-        // }
     }
 }

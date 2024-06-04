@@ -51,7 +51,7 @@ ui_vertical_pad   :: 2
 camera_movement_keys : []rl.KeyboardKey : { .W, .A, .S, .D }
 camera_slow_speed    :: 500
 camera_fast_speed    :: 1250
-camera_zoom_speed    :: 5
+camera_zoom_speed    :: 15
 camera_min_zoom      :: 0.33
 camera_max_zoom      :: 5.0
 
@@ -118,9 +118,23 @@ main :: proc() {
         
         mouse_wheel := GetMouseWheelMove()
         if mouse_wheel != 0 {
+            old_zoom := camera.zoom
             camera.zoom -= camera.zoom*camera.zoom * camera_zoom_speed * mouse_wheel * dt
             camera.zoom = clamp(camera.zoom, camera_min_zoom, camera_max_zoom)
-            adjust_camera(&camera)   
+            mouse_pos := GetMousePosition()
+            
+            viewport_width_f := f32(viewport_width)
+            viewport_height_f := f32(viewport_height)
+            pixels_difference_w := (viewport_width_f / old_zoom) - (viewport_width_f / camera.zoom)
+            side_ratio_x := (mouse_pos.x - (viewport_width_f / 2)) / viewport_width_f
+         
+            pixels_difference_h := (viewport_height_f / old_zoom) - (viewport_height_f / camera.zoom)
+            side_ratio_h := (mouse_pos.y - (viewport_height_f / 2)) / viewport_height_f
+            
+            camera.x -= mouse_wheel * pixels_difference_w * side_ratio_x
+            camera.y += mouse_wheel * pixels_difference_h * side_ratio_h
+
+            adjust_camera(&camera)
         }
         key_to_direction :: proc(key: KeyboardKey) -> [2]f32 {
             #partial switch (key) {
@@ -174,6 +188,14 @@ main :: proc() {
             if (IsKeyPressed(KeyboardKey.F1)) {
                 player.ui_disabled = !player.ui_disabled
             }
+            if (IsKeyPressed(KeyboardKey.F2)) {
+                 for row := 0; row < particle_color_count; row += 1 {
+                    for col := 0; col < particle_color_count; col += 1 {
+                        fmt.print(particle_attraction_table[row * particle_color_count + col])
+                    }
+                    fmt.println()
+                }
+            }
             if (IsKeyPressed(KeyboardKey.F11)) {
                 resize_window_elements(GetMonitorWidth(0), GetMonitorHeight(0), &camera)
                 ToggleBorderlessWindowed()
@@ -184,7 +206,7 @@ main :: proc() {
             if (IsKeyPressed(KeyboardKey.Z)) {
                 for row := 0; row < particle_color_count; row += 1 {
                     for col := 0; col < particle_color_count; col += 1 {
-                        particle_attraction_table[row][col] = 0.0
+                        particle_attraction_table[row * particle_color_count + col] = 0.0
                     }
                 }
             }
@@ -237,7 +259,7 @@ main :: proc() {
             pad :: 2
             y : f32 = 20.0
             DrawTextEx(font, TextFormat("Particle count: %d", len(particles)),       {ui_elements_pad, y + 0 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
-            DrawTextEx(font, TextFormat("Frame:   %04.2fms (%d FPS)", 1000.0 * dt, i32(1.0 / dt)),           {ui_elements_pad, y + 1 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
+            DrawTextEx(font, TextFormat("Frame:   %04.2fms (%d FPS)", 1000.0 * dt, i32(1.0 / dt)),             {ui_elements_pad, y + 1 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
             DrawTextEx(font, TextFormat("Physics: %04.2fms", 1000.0 * physics_time), {ui_elements_pad, y + 2 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
             DrawTextEx(font, TextFormat("Render:  %04.2fms", 1000.0 * render_time),  {ui_elements_pad, y + 3 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
             
@@ -246,14 +268,15 @@ main :: proc() {
             GuiSetStyle(i32(GuiControl.LABEL), i32(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
             {
                 pun : u32 = 0xFFFFFFFF
-                GuiSetStyle(i32(GuiControl.LABEL), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)pun)
+                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)pun)
+                // GuiSetStyle(i32(GuiControl.LABEL), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)pun)
             }
-            
+
             y = 120.0
             GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Particle Radius")
             y += ui_element_height + ui_vertical_pad
             GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "1.0", "10.0", &particle_radius, 1.0, 10.0)
-            
+
             y += 2 * (ui_element_height + ui_vertical_pad)
             GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Attraction Strength")
             y += ui_element_height + ui_vertical_pad
@@ -309,7 +332,7 @@ main :: proc() {
             }
             for row := 0; row < particle_color_count; row += 1 {
                 for col := 0; col < particle_color_count; col += 1 {
-                    color := lerp_color(RED, GREEN, (1.0 + particle_attraction_table[row][col]) / 2.0)
+                    color := lerp_color(RED, GREEN, (1.0 + particle_attraction_table[row * particle_color_count + col]) / 2.0)
                     if player.adjusting_color == nil && GuiButton(attraction_label_rect, "") {
                         player.adjusting_color = [2]int{row, col}
                     }
@@ -349,7 +372,7 @@ main :: proc() {
             y += f32(particle_color_count) * color_label_offset
             
             if color_idx, is_adjusting := player.adjusting_color.?; is_adjusting {
-                adjusted_value := &particle_attraction_table[color_idx.x][color_idx.y]
+                adjusted_value := &particle_attraction_table[color_idx.x * particle_color_count + color_idx.y]
                 GuiSlider(Rectangle{ui_elements_pad, y, ui_panel_width - 60.0, 16}, "-1.0", "1.0", adjusted_value, -1.0, 1.0)
                 if GuiButton(Rectangle{ui_elements_pad + ui_panel_width - 55.0, y, 20, 20}, "X") {
                     player.adjusting_color = nil
@@ -377,10 +400,10 @@ to_vec2_i32 :: proc(p: [2]f32) -> [2]i32 {
     return {i32(p.x), i32(p.y)}
 }
 
-fill_with_random_values :: proc(mat: ^[6][6]f32, from: f32, to: f32) {
-    for row := 0; row < 6; row += 1 {
-        for col := 0; col < 6; col += 1 {
-            mat[row][col] = (to - from) * rand.float32() + from
+fill_with_random_values :: proc(mat: ^[particle_color_count * particle_color_count]f32, from: f32, to: f32) {
+    for row := 0; row < particle_color_count; row += 1 {
+        for col := 0; col < particle_color_count; col += 1 {
+            mat[row * particle_color_count + col] = (to - from) * rand.float32() + from
         }
     }
 }
