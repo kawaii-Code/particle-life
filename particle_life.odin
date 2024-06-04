@@ -1,29 +1,30 @@
-package main
+package particle_life
 
 import "core:math"
 import "core:math/linalg"
+import "core:fmt"
+import "core:os"
 
 
-
-particle_radius     : f32 = 4.0
-particle_speed      :: 0.1
-particle_spread     :: 0.01
+particle_radius              : f32 = 4.0
+particle_spawn_spread        :     : 0.01
 particle_attraction_strength : f32 = 0.3
-particle_repel_strength :     : 0.2 
-particle_air_resistance : f32 = 20
-particle_repel_distance : f32 = 0.05
-particle_max_distance   : f32 = 0.2
+particle_repel_strength      :     : 0.2 
+particle_air_resistance      : f32 = 20
+particle_repel_distance      : f32 = 0.05
+particle_max_distance        : f32 = 0.2
+particle_color_count         :     : int(ParticleColor.Count)
 
+particle_max_velocity        :: 10.0
 
 epsilon :: 0.0001
 
-color_count      :: 6
-attraction_table : [color_count][color_count]f32
+particle_attraction_table : [particle_color_count][particle_color_count]f32
 
 
 
 ParticleColor :: enum {
-    R = 0, G, B, Y, P, W
+    R, G, B, Y, P, W, Count
 }
 
 Particle :: struct {
@@ -44,6 +45,8 @@ wrap_particle_position :: proc(p: ^Particle) {
         p.y = 0
     }
 }
+
+particle_half_life :: 0.1
 
 direction_and_distance_between :: proc(p1: [2]f32, p2: [2]f32) -> (direction: [2]f32, distance: f32) {
     direction = p2 - p1
@@ -90,7 +93,7 @@ direction_and_distance_between :: proc(p1: [2]f32, p2: [2]f32) -> (direction: [2
         }
     }
     
-    return direction, math.sqrt(distance)
+    return linalg.normalize0(direction), math.sqrt(distance)
 }
 
 update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
@@ -107,27 +110,52 @@ update_particles :: proc(particles: [dynamic]Particle, dt: f32) {
                 continue
             }
             p2 := &particles[j]
-            attraction_color_coef := attraction_table[color_to_idx(p1.c)][color_to_idx(p2.c)]
+            attraction_color_coef := particle_attraction_table[int(p1.c)][int(p2.c)]
             
             direction, distance := direction_and_distance_between(p1^, p2^)
             
-            attraction_force : [2]f32
             if distance > particle_max_distance {
-                attraction_force = 0
+                continue
             } else if distance < particle_repel_distance {
-                repel_direction := length(direction) < epsilon ? rand_direction() : normalize(-1 * direction)
-                attraction_force = particle_repel_strength * repel_direction * (1.0 - distance / particle_repel_distance)
+                repel_direction := length2(direction) < epsilon ? rand_direction() : normalize(-1 * direction)
+                f += particle_repel_strength * repel_direction * (1.0 - distance / particle_repel_distance)
             } else {
+                attract_direction := length2(direction) < epsilon ? rand_direction() : normalize(direction)
+                attraction_force : [2]f32
+
                 middle := (particle_repel_distance + particle_max_distance) / 2
-                t := (1.0 - math.abs(middle - distance) / middle)
-                attraction_force = normalize(direction) * t
+                half := (particle_max_distance - particle_repel_distance) / 2.0
+                t := (1.0 - math.abs(middle - distance) / half)
+                attraction_force = attract_direction * t
+                f += particle_attraction_strength * attraction_color_coef * attraction_force
             }
+            // if distance < particle_repel_distance {
+            //     attraction_force = direction * distance / particle_repel_distance - 1
+            // } else {
+            //     attraction_force = direction * (1 - math.abs(1 + particle_repel_distance - 2 * distance) / (1 - particle_repel_distance));
+            //     // attraction_force = direction / particle_repel_distance - 1
+            // }
             
-            f += particle_attraction_strength * attraction_color_coef * attraction_force
+           
+            when ODIN_DEBUG {
+                if math.is_nan(f.x) || math.is_nan(f.y) {
+                    fmt.println("nan. direction = ", direction, "distance = ", distance)
+                    os.exit(1)
+                }
+            }
         }
-        if length2(p1.v) > epsilon {
-            f += -1 * normalize(p1.v) * particle_air_resistance * length2(p1.v)
-        }
-        p1.v += f * dt
+        
+        // f /= f32(len(particles))
+        // f += -1 * normalize0(p1.v) * particle_air_resistance * length2(p1.v)
+        // when ODIN_DEBUG {
+        //     if math.is_nan(f.x) || math.is_nan(f.y) {
+        //         fmt.println("nan. on air_resistance. v = ", p1.v, " length = ", length(p1.v), "epsilon = ", epsilon, "normalized = ", normalize(p1.v))
+        //         os.exit(1)
+        //     }
+        // }
+        p1.v = math.pow(0.5, dt / particle_half_life) * p1.v + f * dt
+        // if length2(p1.v) >= particle_max_velocity {
+        //     p1.v = rand_direction() * particle_max_velocity
+        // }
     }
 }
