@@ -5,8 +5,6 @@ TODO:
   - Spatial partitioning
   - Multiple threads
 
-- Do physics in a separate thread with a fixed timestep
-
 - Better Controls
   - Zoom at mouse
   - Better zoom function
@@ -23,14 +21,16 @@ import "core:os"
 import "core:math"
 import "core:math/linalg"
 import "core:math/rand"
+import "core:thread"
+import "core:time"
+import "core:sync"
 
 import rl "vendor:raylib"
 
 
 
-colors_table     : [particle_color_count]rl.Color = { rl.RED, rl.GREEN, rl.BLUE, rl.YELLOW, rl.PURPLE, rl.WHITE }
+colors_table    : [particle_color_count]rl.Color = { rl.RED, rl.GREEN, rl.BLUE, rl.YELLOW, rl.PURPLE, rl.WHITE }
 
-world_size      :: 2000
 
 window_width    : i32 = 1000
 window_height   : i32 = 600
@@ -51,19 +51,20 @@ ui_vertical_pad   :: 2
 camera_movement_keys : []rl.KeyboardKey : { .W, .A, .S, .D }
 camera_slow_speed    :: 500
 camera_fast_speed    :: 1250
-camera_zoom_speed    :: 15
+camera_zoom_speed    :: 0.05
 camera_min_zoom      :: 0.33
 camera_max_zoom      :: 5.0
 
 
 
 PlayerState :: struct {
-    tracked_particle_index : Maybe(int),
+    tracked_particle : Maybe(^Particle),
     active_color           : Maybe(ParticleColor),
     adjusting_color        : Maybe([2]int),
     selecting_color        : bool,
     ui_disabled            : bool,
     simulation_paused      : bool,
+    draw_debug_graphics    : bool,
     click_spawn_count      : f32,
 }
 
@@ -71,6 +72,12 @@ MyCamera :: struct {
     using rect: rl.Rectangle,
     zoom: f32,
 }
+
+
+// target_physics_fps  :: 60
+// physics_timestep    :: time.Second / target_physics_fps
+
+physics_time        : f64 = 0.0
 
 
 
@@ -85,12 +92,13 @@ main :: proc() {
             os.exit(1 if has_leaks else 0)
         }
     }
-    
+
     using rl
 
     SetConfigFlags(ConfigFlags {.WINDOW_RESIZABLE})
     InitWindow(window_width, window_height, "particle life")
     defer CloseWindow()
+    
 
     SetTargetFPS(240)
 
@@ -101,12 +109,10 @@ main :: proc() {
     resize_window_elements(window_width, window_height, &camera)
    
     player : PlayerState
-    player.click_spawn_count = 1
+    player.click_spawn_count = 5
 
-    particles : #soa[dynamic]Particle
-    forces_buffer : [dynamic][2]f32
-    defer delete(particles)
-    defer delete(forces_buffer)
+    world := world_create()
+    defer world_destroy(&world)
     fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
 
     render_time := 0.0
@@ -117,28 +123,15 @@ main :: proc() {
             resize_window_elements(GetScreenWidth(), GetScreenHeight(), &camera)
         }
         
-        mouse_wheel := GetMouseWheelMove()
-        if mouse_wheel != 0 {
+        if mouse_wheel := GetMouseWheelMove(); mouse_wheel != 0 {
             old_zoom := camera.zoom
             if mouse_wheel > 0 {
-                camera.zoom -= camera.zoom*camera.zoom * camera_zoom_speed * mouse_wheel * dt
+                camera.zoom -= camera.zoom*camera.zoom * camera_zoom_speed * mouse_wheel
             } else {
-                camera.zoom -= math.sqrt(camera.zoom) * camera_zoom_speed * mouse_wheel * dt
+                camera.zoom -= math.sqrt(camera.zoom) * camera_zoom_speed * mouse_wheel
             }
             camera.zoom = clamp(camera.zoom, camera_min_zoom, camera_max_zoom)
             mouse_pos := GetMousePosition()
-            
-            viewport_width_f := f32(viewport_width)
-            viewport_height_f := f32(viewport_height)
-            pixels_difference_w := (viewport_width_f / old_zoom) - (viewport_width_f / camera.zoom)
-            side_ratio_x := (mouse_pos.x - (viewport_width_f / 2)) / viewport_width_f
-         
-            pixels_difference_h := (viewport_height_f / old_zoom) - (viewport_height_f / camera.zoom)
-            side_ratio_h := (mouse_pos.y - (viewport_height_f / 2)) / viewport_height_f
-            
-            camera.x -= mouse_wheel * pixels_difference_w * side_ratio_x
-            camera.y += mouse_wheel * pixels_difference_h * side_ratio_h
-
             adjust_camera_size(&camera)
         }
         key_to_direction :: proc(key: KeyboardKey) -> [2]f32 {
@@ -153,7 +146,7 @@ main :: proc() {
         }
         camera_direction := [2]f32{0, 0}
         for key in camera_movement_keys {
-            if (IsKeyDown(key)) {
+            if IsKeyDown(key) {
                 camera_direction += key_to_direction(key)
             }
         }
@@ -170,68 +163,61 @@ main :: proc() {
                         particle_spawn_spread * rand.float32() - particle_spawn_spread / 2.0,
                         particle_spawn_spread * rand.float32() - particle_spawn_spread / 2.0
                     }
-                    append_soa(&particles, Particle{pos, {0, 0}, color})
-                    append(&forces_buffer, [2]f32{0,0})
+                    world_add_particle(&world, Particle{nil, nil, pos, {0, 0}, {0, 0}, color})
                 }
             }
         }
         
         // Debug Controls
         {
-            if (IsKeyPressed(KeyboardKey.SPACE)) {
+            if IsKeyPressed(KeyboardKey.SPACE) {
                 player.simulation_paused = !player.simulation_paused
             }
-            if (IsKeyPressed(KeyboardKey.R)) {
+            if IsKeyPressed(KeyboardKey.R) {
                 fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
             }
-            if (IsKeyPressed(KeyboardKey.C)) {
-                clear_soa(&particles)
-                clear(&forces_buffer)
+            if IsKeyPressed(KeyboardKey.C) {
+                world_clear_particles(&world)
             }
-            if (IsKeyPressed(KeyboardKey.T)) {
+            if IsKeyPressed(KeyboardKey.T) {
                 if mouse_pos := to_vec2_i32(GetMousePosition()); point_not_on_ui(mouse_pos, player) {
                     normalized_mouse_pos := world_to_normalized(screen_to_world(mouse_pos, camera))
-                    index, distance := index_of_particle_closest_to(normalized_mouse_pos, particles)
+                    particle, distance := index_of_particle_closest_to(normalized_mouse_pos, &world)
                     if distance < 0.005 {
-                        if already_tracked_index, ok := player.tracked_particle_index.?; ok && already_tracked_index == index.? {
-                            player.tracked_particle_index = nil
+                        if already_tracked, ok := player.tracked_particle.?; ok && already_tracked == particle.? {
+                            player.tracked_particle = nil
                         } else {
-                            player.tracked_particle_index = index
+                            player.tracked_particle = particle
                         }
                     } else {
-                        player.tracked_particle_index = nil
+                        player.tracked_particle = nil
                     }
                 }
             }
-            if (IsKeyPressed(KeyboardKey.Z)) {
+            if IsKeyPressed(KeyboardKey.Z) {
                 for row := 0; row < particle_color_count; row += 1 {
                     for col := 0; col < particle_color_count; col += 1 {
                         particle_attraction_table[row * particle_color_count + col] = 0.0
                     }
                 }
             }
-            if (IsKeyPressed(KeyboardKey.F1)) {
+            if IsKeyPressed(KeyboardKey.X) {
+                player.draw_debug_graphics = !player.draw_debug_graphics
+            }
+            if IsKeyPressed(KeyboardKey.F1) {
                 player.ui_disabled = !player.ui_disabled
             }
-            if (IsKeyPressed(KeyboardKey.F2)) {
-                for row := 0; row < particle_color_count; row += 1 {
-                    for col := 0; col < particle_color_count; col += 1 {
-                        fmt.print(particle_attraction_table[row * particle_color_count + col])
-                    }
-                    fmt.println()
-                }
-            }
-            if (IsKeyPressed(KeyboardKey.F11)) {
+            if IsKeyPressed(KeyboardKey.F11) {
                 resize_window_elements(GetMonitorWidth(0), GetMonitorHeight(0), &camera)
                 ToggleBorderlessWindowed()
             }
         }
-               
+
         physics_begin := GetTime()
         if !player.simulation_paused {
-            update_particles(particles, forces_buffer, dt)
+            world_update(&world, f32(dt))
         }
-        physics_time := GetTime() - physics_begin
+        physics_time = GetTime() - physics_begin
         
         render_begin := GetTime()
         BeginDrawing()
@@ -245,150 +231,47 @@ main :: proc() {
         BeginTextureMode(target)
         {
             ClearBackground(viewport_bg)
-            for p in particles {    
-                world_pos := normalized_to_world(p)
-                DrawCircle(world_pos.x, world_pos.y, particle_radius, get_color(p.c))
+            if player.draw_debug_graphics {
+                for i := 0; i < grid_size; i += 1 {
+                    for j := 0; j < grid_size; j += 1 {
+                        grid_world_size := world_size / grid_size
+                        grid_y := i * grid_world_size
+                        grid_x := j * grid_world_size
+                        grid_color := (i + j) % 2 == 0 ? GRAY : GetColor(0x202020FF)
+                        
+                        DrawRectangle(i32(grid_x), i32(grid_y), i32(grid_world_size), i32(grid_world_size), grid_color)
+                        DrawTextEx(font, TextFormat("[%d, %d]", i, j), {f32(grid_x), f32(grid_y)}, ui_font_size, 0.0, WHITE)   
+                    }
+                }                
             }
             
-            if p_index, ok := player.tracked_particle_index.?; ok  && p_index < len(particles) {
-                draw_debug_info_for_particle(particles[p_index], forces_buffer[p_index], font)
+            for i := 0; i < grid_size; i += 1 {
+                for j := 0; j < grid_size; j += 1 {
+                    p := world.grid[i][j]
+                    for p != nil {
+                        world_pos := normalized_to_world(p)
+                        DrawCircle(world_pos.x, world_pos.y, particle_radius, get_color(p.c))
+                        p = p.next
+                    }
+                }
+            }
+            
+            if player.draw_debug_graphics {
+                if tracked_particle, ok := player.tracked_particle.?; ok{
+                    draw_debug_info_for_particle(&world, tracked_particle, font)
+                }    
             }
         }
         EndTextureMode()
 
         draw_part_of_texture_seen_by_camera(target.texture, camera)
-
         if !player.ui_disabled {
-            DrawRectangle(0, 0, ui_panel_width, ui_panel_height, ui_panel_bg)
-            
-            ui_elements_pad :: 20
-            ui_element_width :: ui_panel_width - 4 * ui_elements_pad
-            pad :: 2
-            y : f32 = 20.0
-            DrawTextEx(font, TextFormat("Particle count: %d", len(particles)),       {ui_elements_pad, y + 0 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
-            DrawTextEx(font, TextFormat("Frame:   %04.2fms (%d FPS)", 1000.0 * dt, i32(1.0 / dt)),             {ui_elements_pad, y + 1 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
-            DrawTextEx(font, TextFormat("Physics: %04.2fms", 1000.0 * physics_time), {ui_elements_pad, y + 2 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
-            DrawTextEx(font, TextFormat("Render:  %04.2fms", 1000.0 * render_time),  {ui_elements_pad, y + 3 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
-            
-            {
-                GuiSetFont(font)
-                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiDefaultProperty.TEXT_SIZE), ui_font_size)
-                GuiSetStyle(i32(GuiControl.LABEL), i32(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
-                white_hex : u32 = 0xFFFFFFFF
-                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)white_hex)
-            }
-
-            y = 120.0
-            GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Particle Radius")
-            y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "1.0", "10.0", &particle_radius, 1.0, 10.0)
-
-            y += 2 * (ui_element_height + ui_vertical_pad)
-            GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Attraction Strength")
-            y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "1.0", &particle_attraction_strength, 0.0, 1.0)
-            
-            y += 2 * (ui_element_height + ui_vertical_pad)
-            GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Max Distance")
-            y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "1.0", &particle_max_distance, 0.0, 1.0)
-            
-            y += 2 * (ui_element_height + ui_vertical_pad)
-            GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Particle Repel Distance")
-            y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "1.0", &particle_repel_distance, 0.0, 1.0)
-                
-            y += 2 * (ui_element_height + ui_vertical_pad)
-            GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Brush Strength")
-            y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "50", &player.click_spawn_count, 0, 50.0)
-          
-            y += 2 * (ui_element_height + ui_vertical_pad)
-            selected_color : i32 = 0
-            if color, ok := player.active_color.?; ok {
-                selected_color = i32(color) + 1
-            }
-            if GuiDropdownBox(Rectangle{ui_elements_pad, y, ui_element_width, 16}, "Select Color;RED;GREEN;BLUE;YELLOW;PURPLE;WHITE", &selected_color, false) {
-                player.selecting_color = true
-            }
-            
-            y += 40.0
-            color_label_pad :: 6
-            color_label_size :: 20
-            color_label_offset :: color_label_size + color_label_pad
-            
-            color_rect := Rectangle{color_label_offset + ui_elements_pad, y, color_label_size, color_label_size}
-            for col := 0; col < particle_color_count; col += 1 {
-                DrawRectangleRec(color_rect, colors_table[col])
-                color_rect.x += color_label_offset
-            }
-            y += color_label_offset
-            color_rect = Rectangle{ui_elements_pad, y, color_label_size, color_label_size}
-            for row := 0; row < particle_color_count; row += 1 {
-                DrawRectangleRec(color_rect, colors_table[row])
-                color_rect.y += color_label_offset
-            }
-            
-            starting_x := ui_elements_pad + color_label_offset
-            attraction_label_rect := Rectangle{
-                f32(starting_x),
-                y,
-                color_label_size,
-                color_label_size,
-            }
-            for row := 0; row < particle_color_count; row += 1 {
-                for col := 0; col < particle_color_count; col += 1 {
-                    color := lerp_color(RED, GREEN, (1.0 + particle_attraction_table[row * particle_color_count + col]) / 2.0)
-                    if player.adjusting_color == nil && GuiButton(attraction_label_rect, "") {
-                        player.adjusting_color = [2]int{row, col}
-                    }
-                    DrawRectangleRec(attraction_label_rect, color)
-                    attraction_label_rect.x += color_label_offset
-                }
-                attraction_label_rect.x = f32(starting_x)
-                attraction_label_rect.y += color_label_offset
-            }
-            
-            if player.selecting_color {
-                color_button_y := y
-                for row := 0; row < particle_color_count; row += 1 {
-                    color_button_y += 22.0
-                    color_button_rect := Rectangle{20.0, color_button_y, 20, 20}
-                    
-                    if GuiButton(color_button_rect, "") {
-                        player.active_color = ParticleColor(row)
-                        player.selecting_color = false
-                    }
-                    {
-                        using color_button_rect
-                        pad :: 4
-                        DrawRectangleRec(Rectangle{x - pad, y - pad, width + 2 * pad, height + 2 * pad}, BLACK)
-                    }
-                    DrawRectangleRec(color_button_rect, colors_table[row])
-                }
-                color_button_y += 22.0
-                rect := Rectangle{20.0, color_button_y, 20, 20}
-                if GuiButton(rect, "") {
-                    player.active_color = nil
-                    player.selecting_color = false
-                }
-                DrawRectangleRec(rect, BLACK)
-            }
-            
-            y += f32(particle_color_count) * color_label_offset
-            
-            if color_idx, is_adjusting := player.adjusting_color.?; is_adjusting {
-                adjusted_value := &particle_attraction_table[color_idx.x * particle_color_count + color_idx.y]
-                GuiSlider(Rectangle{ui_elements_pad, y, ui_panel_width - 60.0, 16}, "-1.0", "1.0", adjusted_value, -1.0, 1.0)
-                if GuiButton(Rectangle{ui_elements_pad + ui_panel_width - 55.0, y, 20, 20}, "X") {
-                    player.adjusting_color = nil
-                }
-            }
+            draw_ui(&world, &player, font, render_time, dt)
         }
     }
 }
 
-draw_debug_info_for_particle :: proc(p: Particle, force: [2]f32, font: rl.Font) {
+draw_debug_info_for_particle :: proc(world: ^World, p: ^Particle, font: rl.Font) {
     using rl
 
     world_pos := normalized_to_world(p)
@@ -401,20 +284,41 @@ draw_debug_info_for_particle :: proc(p: Particle, force: [2]f32, font: rl.Font) 
     DrawLineV(world_pos_f, end, get_color(p.c))
     DrawTextEx(font, TextFormat("v: %02.2f", p.v), (world_pos_f + end) / 2.0 - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
     
-    DrawTextEx(font, TextFormat("f: %02.2f", force), (world_pos_f + end) / 2.0 + {0, 2 * particle_radius}, ui_font_size, 0.0, WHITE)
-}
-
-index_of_particle_closest_to :: proc(normalized_pos: [2]f32, particles: #soa[dynamic]Particle) -> (index: Maybe(int), min_distance: f32) {
-    min_distance = 1e10
-    closest_particle_index : Maybe(int)
-    for p, i in particles {
-        mouse_particle_distance := linalg.length2(normalized_pos - p.pos)
-        if mouse_particle_distance < min_distance {
-            min_distance = mouse_particle_distance
-            closest_particle_index = i
+    DrawCircleLinesV(to_vec2_f32(world_pos), world_size * particle_max_distance, WHITE)
+    DrawCircleLinesV(to_vec2_f32(world_pos), world_size * particle_repel_distance, RED)
+    
+    DrawTextEx(font, TextFormat("f: %02.2f", p.f), (world_pos_f + end) / 2.0 + {0, 2 * particle_radius}, ui_font_size, 0.0, WHITE)
+    
+    outer: for i := 0; i < grid_size; i += 1 {
+        for j := 0; j < grid_size; j += 1 {
+            other := world.grid[i][j]
+            for other != nil {
+                if other == p {
+                    DrawTextEx(font, TextFormat("g: [%d, %d]", i, j), world_pos_f + {2 * particle_radius, 1.6 * particle_radius}, ui_font_size, 0.0, WHITE)    
+                    break outer
+                }
+                other = other.next
+            }
         }
     }
-    return closest_particle_index, min_distance
+}
+
+index_of_particle_closest_to :: proc(normalized_pos: [2]f32, world: ^World) -> (closest_particle: Maybe(^Particle), min_distance: f32) {
+    min_distance = 1e10
+    for row := 0; row < grid_size; row += 1 {
+        for col := 0; col < grid_size; col += 1 {
+            p := world.grid[row][col]
+            for p != nil {
+                mouse_particle_distance := linalg.length2(normalized_pos - p.pos)
+                if mouse_particle_distance < min_distance {
+                    min_distance = mouse_particle_distance
+                    closest_particle = p
+                }
+                p = p.next
+            }
+        }
+    }
+    return closest_particle, min_distance
 }
 
 adjust_camera_size :: proc(camera: ^MyCamera) {
@@ -502,5 +406,134 @@ lerp_color :: proc(c1: rl.Color, c2: rl.Color, t: f32) -> rl.Color {
         lerp_u8(c1.g, c2.g, t),
         lerp_u8(c1.b, c2.b, t),
         lerp_u8(c1.a, c2.a, t),
+    }
+}
+
+draw_ui :: proc(world: ^World, player: ^PlayerState, font: rl.Font, render_time: f64, dt: f32) {
+    using rl
+    DrawRectangle(0, 0, ui_panel_width, ui_panel_height, ui_panel_bg)
+    
+    ui_elements_pad :: 20
+    ui_element_width :: ui_panel_width - 4 * ui_elements_pad
+    pad :: 2
+    y : f32 = 20.0
+    DrawTextEx(font, TextFormat("Particle count: %d", world.particle_count),       {ui_elements_pad, y + 0 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
+    DrawTextEx(font, TextFormat("Frame:   %04.2fms (%d FPS)", 1000.0 * dt, i32(1.0 / dt)),             {ui_elements_pad, y + 1 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
+    DrawTextEx(font, TextFormat("Physics: %04.2fms", 1000.0 * physics_time), {ui_elements_pad, y + 2 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
+    DrawTextEx(font, TextFormat("Render:  %04.2fms", 1000.0 * render_time),  {ui_elements_pad, y + 3 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
+    
+    {
+        GuiSetFont(font)
+        GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiDefaultProperty.TEXT_SIZE), ui_font_size)
+        GuiSetStyle(i32(GuiControl.LABEL), i32(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
+        white_hex : u32 = 0xFFFFFFFF
+        GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)white_hex)
+    }
+    
+    y = 120.0
+    GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Particle Radius")
+    y += ui_element_height + ui_vertical_pad
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "1.0", "10.0", &particle_radius, 1.0, 10.0)
+    
+    y += 2 * (ui_element_height + ui_vertical_pad)
+    GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Attraction Strength")
+    y += ui_element_height + ui_vertical_pad
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "1.0", &particle_attraction_strength, 0.0, 1.0)
+    
+    y += 2 * (ui_element_height + ui_vertical_pad)
+    GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Max Distance")
+    y += ui_element_height + ui_vertical_pad
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "0.1", &particle_max_distance, 0.0, 0.1)
+    
+    y += 2 * (ui_element_height + ui_vertical_pad)
+    GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Particle Repel Distance")
+    y += ui_element_height + ui_vertical_pad
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0.0", "0.05", &particle_repel_distance, 0.0, 0.05)
+    
+    y += 2 * (ui_element_height + ui_vertical_pad)
+    GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Brush Strength")
+    y += ui_element_height + ui_vertical_pad
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "50", &player.click_spawn_count, 0, 50.0)
+    
+    y += 2 * (ui_element_height + ui_vertical_pad)
+    selected_color : i32 = 0
+    if color, ok := player.active_color.?; ok {
+        selected_color = i32(color) + 1
+    }
+    if GuiDropdownBox(Rectangle{ui_elements_pad, y, ui_element_width, 16}, "Select Color;RED;GREEN;BLUE;YELLOW;PURPLE;WHITE", &selected_color, false) {
+        player.selecting_color = true
+    }
+    
+    y += 40.0
+    color_label_pad :: 6
+    color_label_size :: 20
+    color_label_offset :: color_label_size + color_label_pad
+    
+    color_rect := Rectangle{color_label_offset + ui_elements_pad, y, color_label_size, color_label_size}
+    for col := 0; col < particle_color_count; col += 1 {
+        DrawRectangleRec(color_rect, colors_table[col])
+        color_rect.x += color_label_offset
+    }
+    y += color_label_offset
+    color_rect = Rectangle{ui_elements_pad, y, color_label_size, color_label_size}
+    for row := 0; row < particle_color_count; row += 1 {
+        DrawRectangleRec(color_rect, colors_table[row])
+        color_rect.y += color_label_offset
+    }
+    
+    starting_x := ui_elements_pad + color_label_offset
+    attraction_label_rect := Rectangle{
+        f32(starting_x),
+        y,
+        color_label_size,
+        color_label_size,
+    }
+    for row := 0; row < particle_color_count; row += 1 {
+        for col := 0; col < particle_color_count; col += 1 {
+            color := lerp_color(RED, GREEN, (1.0 + particle_attraction_table[row * particle_color_count + col]) / 2.0)
+            if player.adjusting_color == nil && GuiButton(attraction_label_rect, "") {
+                player.adjusting_color = [2]int{row, col}
+            }
+            DrawRectangleRec(attraction_label_rect, color)
+            attraction_label_rect.x += color_label_offset
+        }
+        attraction_label_rect.x = f32(starting_x)
+        attraction_label_rect.y += color_label_offset
+    }
+    
+    if player.selecting_color {
+        color_button_y := y
+        for row := 0; row < particle_color_count; row += 1 {
+            color_button_y += 22.0
+            color_button_rect := Rectangle{20.0, color_button_y, 20, 20}
+            
+            if GuiButton(color_button_rect, "") {
+                player.active_color = ParticleColor(row)
+                player.selecting_color = false
+            }
+            {
+                using color_button_rect
+                pad :: 4
+                DrawRectangleRec(Rectangle{x - pad, y - pad, width + 2 * pad, height + 2 * pad}, BLACK)
+            }
+            DrawRectangleRec(color_button_rect, colors_table[row])
+        }
+        color_button_y += 22.0
+        rect := Rectangle{20.0, color_button_y, 20, 20}
+        if GuiButton(rect, "") {
+            player.active_color = nil
+            player.selecting_color = false
+        }
+        DrawRectangleRec(rect, BLACK)
+    }
+    
+    y += f32(particle_color_count) * color_label_offset
+    
+    if color_idx, is_adjusting := player.adjusting_color.?; is_adjusting {
+        adjusted_value := &particle_attraction_table[color_idx.x * particle_color_count + color_idx.y]
+        GuiSlider(Rectangle{ui_elements_pad, y, ui_panel_width - 60.0, 16}, "-1.0", "1.0", adjusted_value, -1.0, 1.0)
+        if GuiButton(Rectangle{ui_elements_pad + ui_panel_width - 55.0, y, 20, 20}, "X") {
+            player.adjusting_color = nil
+        }
     }
 }
