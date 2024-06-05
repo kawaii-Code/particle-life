@@ -1,14 +1,14 @@
 /*
 
 TODO:
-- Performance
-  - Spatial partitioning
-  - Multiple threads
-
 - Better Controls
   - Zoom at mouse
   - Better zoom function
   - Scale camera speed with zoom
+
+- Fix everything that's broken
+  - Multiple threads are great, but they are writing to overlapping data parts. It's a miracle nothing is breaking too much
+  - Grid size needs to depend on r_max
 
 */
 
@@ -38,7 +38,7 @@ window_height   : i32 = 600
 
 viewport_width  : i32 = 800
 viewport_height : i32 = 600
-viewport_bg     :     : rl.Color{10, 10, 10, 255}
+viewport_bg     :     : rl.BLACK
 
 ui_width_ratio    :: 0.25
 ui_panel_width    :: 250
@@ -74,12 +74,7 @@ MyCamera :: struct {
     zoom: f32,
 }
 
-
-// target_physics_fps  :: 60
-// physics_timestep    :: time.Second / target_physics_fps
-
-physics_time        : f64 = 0.0
-
+physics_time : f64 = 0
 
 
 main :: proc() {
@@ -99,7 +94,6 @@ main :: proc() {
     SetConfigFlags(ConfigFlags {.WINDOW_RESIZABLE})
     InitWindow(window_width, window_height, "particle life")
     defer CloseWindow()
-    
 
     SetTargetFPS(240)
 
@@ -112,16 +106,8 @@ main :: proc() {
     player : PlayerState
     player.click_spawn_count = 5
 
-    // thread_pool_arena: virtual.Arena
-    // err := virtual.arena_init_growing(&thread_pool_arena)
-    // if err != nil {
-    //     fmt.eprintln("failed to init arena")
-    //     return
-    // }
-    // thread_pool_allocator := virtual.arena_allocator(&thread_pool_arena)
     world: World
-    world_init(&world)
-    defer world_destroy(&world)
+    defer world_clear_particles(&world)
     fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
 
     frame_arena : virtual.Arena
@@ -131,7 +117,13 @@ main :: proc() {
         return
     }
     defer virtual.arena_destroy(&frame_arena)
-    frame_allocator := virtual.arena_allocator(&frame_arena) 
+
+    thread_pool: thread.Pool
+    thread.pool_init(&thread_pool, context.allocator, grid_size)
+    defer {
+        thread.pool_join(&thread_pool)
+        thread.pool_destroy(&thread_pool)
+    }
 
     render_time := 0.0
     for !WindowShouldClose() {
@@ -233,13 +225,12 @@ main :: proc() {
 
         physics_begin := GetTime()
         if !player.simulation_paused {
-            thread.pool_init(&world.pool, frame_allocator, grid_size)
-            world_update(&world, frame_allocator, f32(dt))
-            thread.pool_destroy(&world.pool)
+            frame_allocator := virtual.arena_allocator(&frame_arena) 
+            world_update(&world, &thread_pool, frame_allocator, f32(dt))
             virtual.arena_free_all(&frame_arena)
         }
         physics_time = GetTime() - physics_begin
-        
+
         render_begin := GetTime()
         BeginDrawing()
         defer {
@@ -265,18 +256,18 @@ main :: proc() {
                     }
                 }                
             }
-            
+
             for i := 0; i < grid_size; i += 1 {
                 for j := 0; j < grid_size; j += 1 {
                     p := world.grid[i][j]
                     for p != nil {
                         world_pos := normalized_to_world(p)
-                        DrawCircle(world_pos.x, world_pos.y, particle_radius, get_color(p.c))
+                        DrawCircleSector(to_vec2_f32(world_pos), particle_radius, 0, 360, 8, get_color(p.c))
                         p = p.next
                     }
                 }
             }
-            
+
             if player.draw_debug_graphics {
                 if tracked_particle, ok := player.tracked_particle.?; ok{
                     draw_debug_info_for_particle(&world, tracked_particle, font)
@@ -296,20 +287,20 @@ draw_debug_info_for_particle :: proc(world: ^World, p: ^Particle, font: rl.Font)
     using rl
 
     world_pos := normalized_to_world(p)
-    world_pos_f := [2]f32{f32(world_pos.x), f32(world_pos.y)}
+    world_pos_f := to_vec2_f32(world_pos)
     DrawTextEx(font, TextFormat("(%02.2f, %02.2f)", p.x, p.y), world_pos_f - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
-    
+
     p_direction := linalg.normalize(p.v)
     debug_direction_line_length :: 100.0
     end := world_pos_f + p_direction * debug_direction_line_length
     DrawLineV(world_pos_f, end, get_color(p.c))
     DrawTextEx(font, TextFormat("v: %02.2f", p.v), (world_pos_f + end) / 2.0 - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
-    
+
     DrawCircleLinesV(to_vec2_f32(world_pos), world_size * particle_max_distance, WHITE)
     DrawCircleLinesV(to_vec2_f32(world_pos), world_size * particle_repel_distance, RED)
-    
+
     DrawTextEx(font, TextFormat("f: %02.2f", p.f), (world_pos_f + end) / 2.0 + {0, 2 * particle_radius}, ui_font_size, 0.0, WHITE)
-    
+
     outer: for i := 0; i < grid_size; i += 1 {
         for j := 0; j < grid_size; j += 1 {
             other := world.grid[i][j]
@@ -335,7 +326,7 @@ index_of_particle_closest_to :: proc(normalized_pos: [2]f32, world: ^World) -> (
                     min_distance = mouse_particle_distance
                     closest_particle = p
                 }
-                p = p.next
+                p = p.next  
             }
         }
     }
@@ -474,7 +465,7 @@ draw_ui :: proc(world: ^World, player: ^PlayerState, font: rl.Font, render_time:
     y += 2 * (ui_element_height + ui_vertical_pad)
     GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Brush Strength")
     y += ui_element_height + ui_vertical_pad
-    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "50", &player.click_spawn_count, 0, 50.0)
+    GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "150", &player.click_spawn_count, 0, 150.0)
     
     y += 2 * (ui_element_height + ui_vertical_pad)
     selected_color : i32 = 0

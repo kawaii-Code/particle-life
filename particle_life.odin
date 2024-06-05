@@ -13,21 +13,23 @@ import "core:time"
 
 import rl "vendor:raylib"
 
+
+
 particle_radius              : f32 = 4.0
 particle_spawn_spread        :     : 0.01
 particle_attraction_strength : f32 = 0.3
 particle_repel_strength      :     : 0.2 
 particle_air_resistance      : f32 = 20
-particle_repel_distance      : f32 = 0.01
-particle_max_distance        : f32 = 0.03
+particle_max_distance        : f32 = 0.02
+particle_repel_distance      : f32 = 0.005
 particle_color_count         :     : int(ParticleColor.Count)
 particle_half_life           :     : 0.1
 particle_max_velocity        :: 10.0
 particle_attraction_table : [particle_color_count * particle_color_count]f32
 
-epsilon :: 0.0001
+epsilon    :: 0.0001
 
-grid_size  :: 8
+grid_size  :: 16
 world_size :: 4000
 
 
@@ -35,7 +37,6 @@ world_size :: 4000
 World :: struct {
     particle_count : int,
     grid: [grid_size][grid_size]^Particle,
-    pool: thread.Pool,
 };
 
 ParticleColor :: enum {
@@ -53,14 +54,7 @@ Particle :: struct {
 
 
 
-world_init :: proc(world: ^World) {
-}
-
-world_destroy :: proc(world: ^World) {
-    particles_free(world)
-}
-
-particles_free :: proc(world: ^World) {
+world_clear_particles :: proc(world: ^World) {
     for i := 0; i < grid_size; i += 1 {
         for j := 0; j < grid_size; j += 1 {
             p := world.grid[i][j]
@@ -75,6 +69,13 @@ particles_free :: proc(world: ^World) {
     world.particle_count = 0
 }
 
+world_add_particle :: proc(world: ^World, particle: Particle) {
+    new_particle := new_clone(particle)
+    grid_pos := to_grid(particle.pos)
+    insert_in_grid(world, grid_pos, new_particle)
+    world.particle_count += 1
+}
+
 direction_and_distance_between :: proc(p1, p2: [2]f32) -> (direction: [2]f32, distance: f32) {
     abs_min :: proc(x, y: f32) -> f32 {
         if math.abs(x) < math.abs(y) {
@@ -84,22 +85,11 @@ direction_and_distance_between :: proc(p1, p2: [2]f32) -> (direction: [2]f32, di
     }
 
     d := p2 - p1
-    
+
     dx := abs_min(d.x, abs_min(d.x + 1, d.x - 1))
     dy := abs_min(d.y, abs_min(d.y + 1, d.y - 1))
-        
+
     return linalg.normalize([2]f32{dx, dy}), math.sqrt(dx*dx + dy*dy)
-}
-
-world_clear_particles :: proc(world: ^World) {
-    particles_free(world)
-}
-
-world_add_particle :: proc(world: ^World, particle: Particle) {
-    new_particle := new_clone(particle)
-    grid_pos := to_grid(particle.pos)
-    insert_in_grid(world, grid_pos, new_particle)
-    world.particle_count += 1
 }
 
 accumulate_force_from_cell :: proc(world: ^World, p1: ^Particle, cell_start: ^Particle) {
@@ -108,25 +98,22 @@ accumulate_force_from_cell :: proc(world: ^World, p1: ^Particle, cell_start: ^Pa
     p2 := cell_start
     for p2 != nil {
         defer p2 = p2.next
-        direction, dist := direction_and_distance_between(p1, p2)
-        if dist > particle_max_distance {
+        direction, distance := direction_and_distance_between(p1, p2)
+        if distance > particle_max_distance {
             continue
         }
 
-        if dist < particle_repel_distance {
-            repel_direction := length2(direction) < epsilon ? rand_direction() : normalize(-1 * direction)
-            force := particle_repel_strength * repel_direction * (1.0 - dist / particle_repel_distance)
+        if distance < particle_repel_distance {
+            force := particle_repel_strength * -1 * direction * (1.0 - distance / particle_repel_distance)
             p1.f += force
             p2.f -= force
         } else {
-            attract_direction := length2(direction) < epsilon ? rand_direction() : normalize(direction)
-            
             middle := (particle_repel_distance + particle_max_distance) / 2
             half := (particle_max_distance - particle_repel_distance) / 2.0
-            t := (1.0 - math.abs(middle - dist) / half)
+            t := (1.0 - math.abs(middle - distance) / half)
 
-            force := t * particle_attraction_strength * attract_direction
-            
+            force := t * particle_attraction_strength * direction
+
             p1_to_p2 := attraction_factor_between(p1.c, p2.c)
             p2_to_p1 := attraction_factor_between(p2.c, p1.c)
             p1.f += p1_to_p2 * force
@@ -135,14 +122,9 @@ accumulate_force_from_cell :: proc(world: ^World, p1: ^Particle, cell_start: ^Pa
     }
 }
 
-get_cell :: proc(world: ^World, row, col: int) -> ^Particle {
-    wrapped_row := (row + grid_size) % grid_size
-    wrapped_col := (col + grid_size) % grid_size
-    return world.grid[wrapped_row][wrapped_col]
-}
-
 Update_Forces_Task_Data :: struct {
     world: ^World,
+    wg: ^sync.Wait_Group,
     row: int,
     col: int,
 }
@@ -153,29 +135,29 @@ update_forces_task :: proc(task: thread.Task) {
     
     p1 := world.grid[row][col]
     for p1 != nil {
-        // x x
-        // x o
-        // x
         accumulate_force_from_cell(world, p1, p1.next)
-        accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col))
-        accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col - 1))
-        accumulate_force_from_cell(world, p1, get_cell(world, row    , col - 1))
-        accumulate_force_from_cell(world, p1, get_cell(world, row + 1, col - 1))
+        accumulate_force_from_cell(world, p1, grid_cell_at(world, row - 1, col))
+        accumulate_force_from_cell(world, p1, grid_cell_at(world, row - 1, col - 1))
+        accumulate_force_from_cell(world, p1, grid_cell_at(world, row    , col - 1))
+        accumulate_force_from_cell(world, p1, grid_cell_at(world, row + 1, col - 1))
         p1 = p1.next
     }
+    
+    sync.wait_group_done(wg)
 }
 
-world_update :: proc(world: ^World, frame_allocator: runtime.Allocator, dt: f32) {
-    tm := rl.GetTime()
+world_update :: proc(world: ^World, pool: ^thread.Pool, frame_allocator: runtime.Allocator, dt: f32) {
+    wg: sync.Wait_Group
     for row := 0; row < grid_size; row += 1 {
         for col := 0; col < grid_size; col += 1 {
-            task_data := Update_Forces_Task_Data { world, row, col }
+            task_data := Update_Forces_Task_Data { world, &wg, row, col }
             task_index := row * grid_size + col
-            thread.pool_add_task(&world.pool, frame_allocator, update_forces_task, new_clone(task_data, frame_allocator), task_index)
+            sync.wait_group_add(&wg, 1)
+            thread.pool_add_task(pool, frame_allocator, update_forces_task, new_clone(task_data, frame_allocator), task_index)
         }
     }
-    thread.pool_start(&world.pool)
-    thread.pool_finish(&world.pool)
+    thread.pool_start(pool)
+    sync.wait_group_wait(&wg)
     
     for i := 0; i < grid_size; i += 1 {
         for j := 0; j < grid_size; j += 1 {
@@ -200,6 +182,12 @@ world_update :: proc(world: ^World, frame_allocator: runtime.Allocator, dt: f32)
             }
         }
     }
+}
+
+grid_cell_at :: proc(world: ^World, row, col: int) -> ^Particle {
+    wrapped_row := (row + grid_size) % grid_size
+    wrapped_col := (col + grid_size) % grid_size
+    return world.grid[wrapped_row][wrapped_col]
 }
 
 to_grid :: proc(p: [2]f32) -> [2]int {
