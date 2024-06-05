@@ -1,12 +1,17 @@
 package particle_life
 
+import "core:mem"
 import "core:math"
 import "core:math/linalg"
 import "core:fmt"
 import "core:os"
 import "core:sync"
+import "core:mem/virtual"
+import "core:thread"
+import "base:runtime"
+import "core:time"
 
-
+import rl "vendor:raylib"
 
 particle_radius              : f32 = 4.0
 particle_spawn_spread        :     : 0.01
@@ -30,6 +35,7 @@ world_size :: 4000
 World :: struct {
     particle_count : int,
     grid: [grid_size][grid_size]^Particle,
+    pool: thread.Pool,
 };
 
 ParticleColor :: enum {
@@ -47,8 +53,7 @@ Particle :: struct {
 
 
 
-world_create :: proc() -> World {
-    return World {}
+world_init :: proc(world: ^World) {
 }
 
 world_destroy :: proc(world: ^World) {
@@ -136,24 +141,42 @@ get_cell :: proc(world: ^World, row, col: int) -> ^Particle {
     return world.grid[wrapped_row][wrapped_col]
 }
 
-world_update :: proc(world: ^World, dt: f32) {
+Update_Forces_Task_Data :: struct {
+    world: ^World,
+    row: int,
+    col: int,
+}
+
+update_forces_task :: proc(task: thread.Task) {
+    data := (^Update_Forces_Task_Data)(task.data)
+    using data
+    
+    p1 := world.grid[row][col]
+    for p1 != nil {
+        // x x
+        // x o
+        // x
+        accumulate_force_from_cell(world, p1, p1.next)
+        accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col))
+        accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col - 1))
+        accumulate_force_from_cell(world, p1, get_cell(world, row    , col - 1))
+        accumulate_force_from_cell(world, p1, get_cell(world, row + 1, col - 1))
+        p1 = p1.next
+    }
+}
+
+world_update :: proc(world: ^World, frame_allocator: runtime.Allocator, dt: f32) {
+    tm := rl.GetTime()
     for row := 0; row < grid_size; row += 1 {
         for col := 0; col < grid_size; col += 1 {
-            p1 := world.grid[row][col]
-            for p1 != nil {
-                // x x
-                // x o
-                // x
-                accumulate_force_from_cell(world, p1, p1.next)
-                accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col))
-                accumulate_force_from_cell(world, p1, get_cell(world, row - 1, col - 1))
-                accumulate_force_from_cell(world, p1, get_cell(world, row    , col - 1))
-                accumulate_force_from_cell(world, p1, get_cell(world, row + 1, col - 1))
-                p1 = p1.next
-            }
+            task_data := Update_Forces_Task_Data { world, row, col }
+            task_index := row * grid_size + col
+            thread.pool_add_task(&world.pool, frame_allocator, update_forces_task, new_clone(task_data, frame_allocator), task_index)
         }
     }
-
+    thread.pool_start(&world.pool)
+    thread.pool_finish(&world.pool)
+    
     for i := 0; i < grid_size; i += 1 {
         for j := 0; j < grid_size; j += 1 {
             p := world.grid[i][j]

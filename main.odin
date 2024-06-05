@@ -24,6 +24,7 @@ import "core:math/rand"
 import "core:thread"
 import "core:time"
 import "core:sync"
+import "core:mem/virtual"
 
 import rl "vendor:raylib"
 
@@ -111,9 +112,26 @@ main :: proc() {
     player : PlayerState
     player.click_spawn_count = 5
 
-    world := world_create()
+    // thread_pool_arena: virtual.Arena
+    // err := virtual.arena_init_growing(&thread_pool_arena)
+    // if err != nil {
+    //     fmt.eprintln("failed to init arena")
+    //     return
+    // }
+    // thread_pool_allocator := virtual.arena_allocator(&thread_pool_arena)
+    world: World
+    world_init(&world)
     defer world_destroy(&world)
     fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
+
+    frame_arena : virtual.Arena
+    err := virtual.arena_init_growing(&frame_arena)
+    if err != nil {
+        fmt.eprintln("Failed to init frame arena!")
+        return
+    }
+    defer virtual.arena_destroy(&frame_arena)
+    frame_allocator := virtual.arena_allocator(&frame_arena) 
 
     render_time := 0.0
     for !WindowShouldClose() {
@@ -215,7 +233,10 @@ main :: proc() {
 
         physics_begin := GetTime()
         if !player.simulation_paused {
-            world_update(&world, f32(dt))
+            thread.pool_init(&world.pool, frame_allocator, grid_size)
+            world_update(&world, frame_allocator, f32(dt))
+            thread.pool_destroy(&world.pool)
+            virtual.arena_free_all(&frame_arena)
         }
         physics_time = GetTime() - physics_begin
         
