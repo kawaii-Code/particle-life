@@ -39,12 +39,12 @@ viewport_width  : i32 = 800
 viewport_height : i32 = 600
 viewport_bg     :     : rl.Color{10, 10, 10, 255}
 
-ui_width_ratio  :: 0.25
-ui_panel_width  :: 250
-ui_panel_height :: 600
-ui_panel_bg     :: rl.Color{40, 40, 40, 255}
-ui_font         :: "CourierPrime.ttf"
-ui_font_size    :: 16
+ui_width_ratio    :: 0.25
+ui_panel_width    :: 250
+ui_panel_height   :: 600
+ui_panel_bg       :: rl.Color{40, 40, 40, 255}
+ui_font           :: "CourierPrime.ttf"
+ui_font_size      :: 16
 ui_element_height :: 10
 ui_vertical_pad   :: 2
 
@@ -104,8 +104,9 @@ main :: proc() {
     player.click_spawn_count = 1
 
     particles : #soa[dynamic]Particle
+    forces_buffer : [dynamic][2]f32
     defer delete(particles)
-
+    defer delete(forces_buffer)
     fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
 
     render_time := 0.0
@@ -119,7 +120,11 @@ main :: proc() {
         mouse_wheel := GetMouseWheelMove()
         if mouse_wheel != 0 {
             old_zoom := camera.zoom
-            camera.zoom -= camera.zoom*camera.zoom * camera_zoom_speed * mouse_wheel * dt
+            if mouse_wheel > 0 {
+                camera.zoom -= camera.zoom*camera.zoom * camera_zoom_speed * mouse_wheel * dt
+            } else {
+                camera.zoom -= math.sqrt(camera.zoom) * camera_zoom_speed * mouse_wheel * dt
+            }
             camera.zoom = clamp(camera.zoom, camera_min_zoom, camera_max_zoom)
             mouse_pos := GetMousePosition()
             
@@ -134,7 +139,7 @@ main :: proc() {
             camera.x -= mouse_wheel * pixels_difference_w * side_ratio_x
             camera.y += mouse_wheel * pixels_difference_h * side_ratio_h
 
-            adjust_camera(&camera)
+            adjust_camera_size(&camera)
         }
         key_to_direction :: proc(key: KeyboardKey) -> [2]f32 {
             #partial switch (key) {
@@ -157,7 +162,7 @@ main :: proc() {
         camera.y += camera_direction.y * camera_speed * dt
         
         if IsMouseButtonPressed(MouseButton.LEFT) {
-            if mouse_pos := to_vec2_i32(GetMousePosition()); not_on_ui(mouse_pos) {
+            if mouse_pos := to_vec2_i32(GetMousePosition()); point_not_on_ui(mouse_pos, player) {
                 pos := world_to_normalized(screen_to_world(mouse_pos, camera))
                 color := player.active_color.? or_else ParticleColor(rand.int31_max(i32(particle_color_count)))
                 for i := 0; i < int(player.click_spawn_count); i += 1 {
@@ -166,30 +171,50 @@ main :: proc() {
                         particle_spawn_spread * rand.float32() - particle_spawn_spread / 2.0
                     }
                     append_soa(&particles, Particle{pos, {0, 0}, color})
+                    append(&forces_buffer, [2]f32{0,0})
                 }
             }
         }
         
         // Debug Controls
         {
+            if (IsKeyPressed(KeyboardKey.SPACE)) {
+                player.simulation_paused = !player.simulation_paused
+            }
             if (IsKeyPressed(KeyboardKey.R)) {
                 fill_with_random_values(&particle_attraction_table, -1.0, 1.0)
             }
             if (IsKeyPressed(KeyboardKey.C)) {
                 clear_soa(&particles)
+                clear(&forces_buffer)
             }
             if (IsKeyPressed(KeyboardKey.T)) {
-                if _, ok := player.tracked_particle_index.?; ok {
-                    player.tracked_particle_index = nil
-                } else {
-                    player.tracked_particle_index = 0   
+                if mouse_pos := to_vec2_i32(GetMousePosition()); point_not_on_ui(mouse_pos, player) {
+                    normalized_mouse_pos := world_to_normalized(screen_to_world(mouse_pos, camera))
+                    index, distance := index_of_particle_closest_to(normalized_mouse_pos, particles)
+                    if distance < 0.005 {
+                        if already_tracked_index, ok := player.tracked_particle_index.?; ok && already_tracked_index == index.? {
+                            player.tracked_particle_index = nil
+                        } else {
+                            player.tracked_particle_index = index
+                        }
+                    } else {
+                        player.tracked_particle_index = nil
+                    }
+                }
+            }
+            if (IsKeyPressed(KeyboardKey.Z)) {
+                for row := 0; row < particle_color_count; row += 1 {
+                    for col := 0; col < particle_color_count; col += 1 {
+                        particle_attraction_table[row * particle_color_count + col] = 0.0
+                    }
                 }
             }
             if (IsKeyPressed(KeyboardKey.F1)) {
                 player.ui_disabled = !player.ui_disabled
             }
             if (IsKeyPressed(KeyboardKey.F2)) {
-                 for row := 0; row < particle_color_count; row += 1 {
+                for row := 0; row < particle_color_count; row += 1 {
                     for col := 0; col < particle_color_count; col += 1 {
                         fmt.print(particle_attraction_table[row * particle_color_count + col])
                     }
@@ -200,21 +225,11 @@ main :: proc() {
                 resize_window_elements(GetMonitorWidth(0), GetMonitorHeight(0), &camera)
                 ToggleBorderlessWindowed()
             }
-            if (IsKeyPressed(KeyboardKey.SPACE)) {
-                player.simulation_paused = !player.simulation_paused
-            }
-            if (IsKeyPressed(KeyboardKey.Z)) {
-                for row := 0; row < particle_color_count; row += 1 {
-                    for col := 0; col < particle_color_count; col += 1 {
-                        particle_attraction_table[row * particle_color_count + col] = 0.0
-                    }
-                }
-            }
         }
                
         physics_begin := GetTime()
         if !player.simulation_paused {
-            update_particles(particles, dt)
+            update_particles(particles, forces_buffer, dt)
         }
         physics_time := GetTime() - physics_begin
         
@@ -230,27 +245,19 @@ main :: proc() {
         BeginTextureMode(target)
         {
             ClearBackground(viewport_bg)
-            for p in particles {
+            for p in particles {    
                 world_pos := normalized_to_world(p)
                 DrawCircle(world_pos.x, world_pos.y, particle_radius, get_color(p.c))
             }
             
-            if p_index, ok := player.tracked_particle_index.?; ok {
-                p := particles[p_index]
-                world_pos := normalized_to_world(p)
-                world_pos_f := [2]f32{f32(world_pos.x), f32(world_pos.y)}
-                DrawTextEx(font, TextFormat("(%02.2f, %02.2f)", p.x, p.y), world_pos_f - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
-                p_direction := linalg.normalize(p.v)
-                debug_direction_line_length :: 50.0
-                end := world_pos_f + p_direction * debug_direction_line_length
-                DrawLineV(world_pos_f, end, get_color(p.c))
-                DrawTextEx(font, TextFormat("%02.2f", p.v), (world_pos_f + end) / 2.0 - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
+            if p_index, ok := player.tracked_particle_index.?; ok  && p_index < len(particles) {
+                draw_debug_info_for_particle(particles[p_index], forces_buffer[p_index], font)
             }
         }
         EndTextureMode()
-        
-        draw_texture_camera(target.texture, ui_panel_width, 0, camera)
-        
+
+        draw_part_of_texture_seen_by_camera(target.texture, camera)
+
         if !player.ui_disabled {
             DrawRectangle(0, 0, ui_panel_width, ui_panel_height, ui_panel_bg)
             
@@ -263,13 +270,12 @@ main :: proc() {
             DrawTextEx(font, TextFormat("Physics: %04.2fms", 1000.0 * physics_time), {ui_elements_pad, y + 2 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
             DrawTextEx(font, TextFormat("Render:  %04.2fms", 1000.0 * render_time),  {ui_elements_pad, y + 3 * (ui_font_size + pad)}, ui_font_size, 0.0, WHITE)
             
-            GuiSetFont(font)
-            GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiDefaultProperty.TEXT_SIZE), ui_font_size)
-            GuiSetStyle(i32(GuiControl.LABEL), i32(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
             {
-                pun : u32 = 0xFFFFFFFF
-                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)pun)
-                // GuiSetStyle(i32(GuiControl.LABEL), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)pun)
+                GuiSetFont(font)
+                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiDefaultProperty.TEXT_SIZE), ui_font_size)
+                GuiSetStyle(i32(GuiControl.LABEL), i32(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
+                white_hex : u32 = 0xFFFFFFFF
+                GuiSetStyle(i32(GuiControl.DEFAULT), i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)white_hex)
             }
 
             y = 120.0
@@ -295,7 +301,7 @@ main :: proc() {
             y += 2 * (ui_element_height + ui_vertical_pad)
             GuiLabel(Rectangle{ui_elements_pad, y, ui_panel_width, ui_element_height}, "Brush Strength")
             y += ui_element_height + ui_vertical_pad
-            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "15", &player.click_spawn_count, 0, 15.0)
+            GuiSlider(Rectangle{ui_elements_pad, y, ui_element_width, ui_element_height}, "0", "50", &player.click_spawn_count, 0, 50.0)
           
             y += 2 * (ui_element_height + ui_vertical_pad)
             selected_color : i32 = 0
@@ -382,7 +388,36 @@ main :: proc() {
     }
 }
 
-adjust_camera :: proc(camera: ^MyCamera) {
+draw_debug_info_for_particle :: proc(p: Particle, force: [2]f32, font: rl.Font) {
+    using rl
+
+    world_pos := normalized_to_world(p)
+    world_pos_f := [2]f32{f32(world_pos.x), f32(world_pos.y)}
+    DrawTextEx(font, TextFormat("(%02.2f, %02.2f)", p.x, p.y), world_pos_f - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
+    
+    p_direction := linalg.normalize(p.v)
+    debug_direction_line_length :: 100.0
+    end := world_pos_f + p_direction * debug_direction_line_length
+    DrawLineV(world_pos_f, end, get_color(p.c))
+    DrawTextEx(font, TextFormat("v: %02.2f", p.v), (world_pos_f + end) / 2.0 - {0, 1.1 * particle_radius}, ui_font_size, 0.0, WHITE)
+    
+    DrawTextEx(font, TextFormat("f: %02.2f", force), (world_pos_f + end) / 2.0 + {0, 2 * particle_radius}, ui_font_size, 0.0, WHITE)
+}
+
+index_of_particle_closest_to :: proc(normalized_pos: [2]f32, particles: #soa[dynamic]Particle) -> (index: Maybe(int), min_distance: f32) {
+    min_distance = 1e10
+    closest_particle_index : Maybe(int)
+    for p, i in particles {
+        mouse_particle_distance := linalg.length2(normalized_pos - p.pos)
+        if mouse_particle_distance < min_distance {
+            min_distance = mouse_particle_distance
+            closest_particle_index = i
+        }
+    }
+    return closest_particle_index, min_distance
+}
+
+adjust_camera_size :: proc(camera: ^MyCamera) {
     viewport_ratio := f32(viewport_height) / f32(viewport_width)
     camera.width  = f32(viewport_width) * camera.zoom
     camera.height = viewport_ratio * camera.width
@@ -393,11 +428,15 @@ resize_window_elements :: proc(new_width, new_height: i32, camera: ^MyCamera) {
     window_height = new_height
     viewport_width = window_width
     viewport_height = window_height
-    adjust_camera(camera)
+    adjust_camera_size(camera)
 }
 
 to_vec2_i32 :: proc(p: [2]f32) -> [2]i32 {
     return {i32(p.x), i32(p.y)}
+}
+
+to_vec2_f32 :: proc(p: [2]i32) -> [2]f32 {
+    return {f32(p.x), f32(p.y)}
 }
 
 fill_with_random_values :: proc(mat: ^[particle_color_count * particle_color_count]f32, from: f32, to: f32) {
@@ -422,15 +461,16 @@ get_color :: proc(pc: ParticleColor) -> rl.Color {
     return colors_table[int(pc)]
 }
 
-not_on_ui :: proc(p: [2]i32) -> bool {
-    return !(0 < p.x && p.x < ui_panel_width &&
-             0 < p.y && p.y < ui_panel_height)
+point_not_on_ui :: proc(p: [2]i32, ps: PlayerState) -> bool {
+    return ps.ui_disabled ||
+         !(0 < p.x && p.x < ui_panel_width &&
+           0 < p.y && p.y < ui_panel_height)
 }
 
-draw_texture_camera :: proc(texture: rl.Texture, x, y: f32, camera: rl.Rectangle) {
+draw_part_of_texture_seen_by_camera :: proc(texture: rl.Texture, camera: rl.Rectangle) {
     using rl
     flipped_texture_rect := Rectangle{camera.x, camera.y, f32(camera.width), -1.0 * f32(camera.height)}
-    dest := Rectangle{0, 0, f32(window_width), f32(viewport_height)}
+    dest := Rectangle{0, 0, f32(window_width), f32(window_height)}
     DrawTexturePro(texture, flipped_texture_rect, dest, [2]f32{0, 0}, 0.0, WHITE)
 }
 
