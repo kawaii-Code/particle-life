@@ -1,15 +1,13 @@
 package particle_life
 
-import "core:mem"
-import "core:math"
-import "core:math/linalg"
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:sync"
-import "core:mem/virtual"
 import "core:thread"
-import "base:runtime"
 import "core:time"
+import "core:math"
+import "core:math/linalg"
 
 import rl "vendor:raylib"
 
@@ -54,6 +52,13 @@ Particle :: struct {
 
 
 
+world_add_particle :: proc(world: ^World, particle: Particle) {
+    new_particle := new_clone(particle)
+    grid_pos := to_grid(particle.pos)
+    insert_in_grid(world, grid_pos, new_particle)
+    world.particle_count += 1
+}
+
 world_clear_particles :: proc(world: ^World) {
     for i := 0; i < grid_size; i += 1 {
         for j := 0; j < grid_size; j += 1 {
@@ -67,13 +72,6 @@ world_clear_particles :: proc(world: ^World) {
         }
     }
     world.particle_count = 0
-}
-
-world_add_particle :: proc(world: ^World, particle: Particle) {
-    new_particle := new_clone(particle)
-    grid_pos := to_grid(particle.pos)
-    insert_in_grid(world, grid_pos, new_particle)
-    world.particle_count += 1
 }
 
 direction_and_distance_between :: proc(p1, p2: [2]f32) -> (direction: [2]f32, distance: f32) {
@@ -123,10 +121,10 @@ accumulate_force_from_cell :: proc(world: ^World, p1: ^Particle, cell_start: ^Pa
 }
 
 Update_Forces_Task_Data :: struct {
-    world: ^World,
-    wg: ^sync.Wait_Group,
-    row: int,
-    col: int,
+    world : ^World,
+    wg    : ^sync.Wait_Group,
+    row   : int,
+    col   : int,
 }
 
 update_forces_task :: proc(task: thread.Task) {
@@ -146,14 +144,14 @@ update_forces_task :: proc(task: thread.Task) {
     sync.wait_group_done(wg)
 }
 
-world_update :: proc(world: ^World, pool: ^thread.Pool, frame_allocator: runtime.Allocator, dt: f32) {
+world_update :: proc(world: ^World, pool: ^thread.Pool, dt: f32) {
     wg: sync.Wait_Group
     for row := 0; row < grid_size; row += 1 {
         for col := 0; col < grid_size; col += 1 {
             task_data := Update_Forces_Task_Data { world, &wg, row, col }
             task_index := row * grid_size + col
             sync.wait_group_add(&wg, 1)
-            thread.pool_add_task(pool, frame_allocator, update_forces_task, new_clone(task_data, frame_allocator), task_index)
+            thread.pool_add_task(pool, context.temp_allocator, update_forces_task, new_clone(task_data, context.temp_allocator), task_index)
         }
     }
     thread.pool_start(pool)

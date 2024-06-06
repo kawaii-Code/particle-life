@@ -9,6 +9,11 @@ TODO:
 - Fix everything that's broken
   - Multiple threads are great, but they are writing to overlapping data parts. It's a miracle nothing is breaking too much
   - Grid size needs to depend on r_max
+  - Cull particles outside of camera view. But be careful of wrapping
+
+- Better Rendering
+  - Currently particles are too pixelated. Preferrably I need a custom shader
+    instead of drawing into a render texture
 
 */
 
@@ -16,15 +21,13 @@ TODO:
 package particle_life
 
 import "core:fmt"
-import "core:mem"
-import "core:os"
-import "core:math"
-import "core:math/linalg"
-import "core:math/rand"
 import "core:thread"
-import "core:time"
-import "core:sync"
+import "core:os"
+import "core:mem"
 import "core:mem/virtual"
+import "core:math"
+import "core:math/rand"
+import "core:math/linalg"
 
 import rl "vendor:raylib"
 
@@ -59,14 +62,14 @@ camera_max_zoom      :: 5.0
 
 
 PlayerState :: struct {
-    tracked_particle : Maybe(^Particle),
-    active_color           : Maybe(ParticleColor),
-    adjusting_color        : Maybe([2]int),
-    selecting_color        : bool,
-    ui_disabled            : bool,
-    simulation_paused      : bool,
-    draw_debug_graphics    : bool,
-    click_spawn_count      : f32,
+    tracked_particle    : Maybe(^Particle),
+    active_color        : Maybe(ParticleColor),
+    adjusting_color     : Maybe([2]int),
+    selecting_color     : bool,
+    ui_disabled         : bool,
+    simulation_paused   : bool,
+    draw_debug_graphics : bool,
+    click_spawn_count   : f32,
 }
 
 MyCamera :: struct {
@@ -103,7 +106,7 @@ main :: proc() {
     camera := MyCamera{rect = Rectangle{0, 0, f32(viewport_width), f32(viewport_height)}, zoom = 1.0}
     resize_window_elements(window_width, window_height, &camera)
    
-    player : PlayerState
+    player: PlayerState
     player.click_spawn_count = 5
 
     world: World
@@ -225,8 +228,8 @@ main :: proc() {
 
         physics_begin := GetTime()
         if !player.simulation_paused {
-            frame_allocator := virtual.arena_allocator(&frame_arena) 
-            world_update(&world, &thread_pool, frame_allocator, f32(dt))
+            context.temp_allocator = virtual.arena_allocator(&frame_arena)
+            world_update(&world, &thread_pool, f32(dt))
             virtual.arena_free_all(&frame_arena)
         }
         physics_time = GetTime() - physics_begin
