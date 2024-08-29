@@ -1,5 +1,9 @@
 # [WIP] Particle Life
 
+note: Lag caused by gif's low framerate. This runs at 240fps.
+
+![demo](demo.gif)
+
 ## Rules
 
 In particle life, we spawn a bunch of particles:
