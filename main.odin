@@ -439,10 +439,10 @@ draw_ui :: proc(world: ^World, player: ^PlayerState, font: rl.Font, render_time:
     
     {
         GuiSetFont(font)
-        GuiSetStyle(.DEFAULT, GuiControlProperty(GuiDefaultProperty.TEXT_SIZE), ui_font_size)
-        GuiSetStyle(.LABEL, GuiControlProperty(GuiTextWrapMode.TEXT_WRAP_CHAR), 1)
+        GuiSetStyle(.DEFAULT, i32(GuiControlProperty(GuiDefaultProperty.TEXT_SIZE)), ui_font_size)
+        GuiSetStyle(.LABEL, i32(GuiControlProperty(GuiTextWrapMode.TEXT_WRAP_CHAR)), 1)
         white_hex : u32 = 0xFFFFFFFF
-        GuiSetStyle(.DEFAULT, .TEXT_COLOR_NORMAL, transmute(i32)white_hex)
+        GuiSetStyle(.DEFAULT, i32(GuiControlProperty.TEXT_COLOR_NORMAL), transmute(i32)white_hex)
     }
     
     y = 120.0
